@@ -188,7 +188,7 @@ impl Auth {
     }
     pub(super) async fn admin_api(
         &self,
-        app: &crate::App,
+        app: &Arc<crate::App>,
         req: Request,
         identity: Identity,
     ) -> ApiResult<Response> {
@@ -243,7 +243,12 @@ impl Auth {
                 #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct Update { disabled:bool, domain_limit_override:Option<i64> }
                 let update:Update=body(req).await?;
                 if update.domain_limit_override.is_some_and(|n|!(0..=1000).contains(&n)) {return Err(ApiError(StatusCode::BAD_REQUEST,"Quota must be 0-1000 or null"));}
+                let app=app.clone();
+                let changes=app.domain_changes.clone().lock_owned().await;
                 self.db(move |db,meta| {
+                    // Keep commit + disconnect atomic with handshake publication even
+                    // when the HTTP caller disconnects while this DB worker is running.
+                    let _changes=changes;
                     let tx=db.transaction()?;
                     if !is_admin(&tx,id)? {return Err(unauthorized());}
                     let (name,admin,disabled,quota)=tx.query_row("SELECT username,is_admin,disabled,domain_limit FROM users WHERE id=?1",[user],|r|Ok((r.get::<_,String>(0)?,r.get::<_,bool>(1)?,r.get::<_,bool>(2)?,r.get::<_,Option<i64>>(3)?))).optional()?.ok_or(ApiError(StatusCode::NOT_FOUND,"User not found"))?;
@@ -251,7 +256,9 @@ impl Auth {
                     tx.execute("UPDATE users SET disabled=?1,domain_limit=?2 WHERE id=?3",params![update.disabled,update.domain_limit_override,user])?;
                     if update.disabled {tx.execute("DELETE FROM sessions WHERE user_id=?1",[user])?;}
                     change(&tx,&identity,"user_update",json!({"user_id":user,"username":name,"disabled":disabled,"domain_limit_override":quota}),json!({"user_id":user,"username":name,"disabled":update.disabled,"domain_limit_override":update.domain_limit_override}),meta)?;
-                    tx.commit()?;Ok(())
+                    tx.commit()?;
+                    if update.disabled {app.disconnect_user(user);}
+                    Ok(())
                 }).await?;
                 Ok(StatusCode::NO_CONTENT.into_response())
             },

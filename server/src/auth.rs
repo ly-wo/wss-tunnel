@@ -501,7 +501,7 @@ impl Auth {
             eprintln!("Could not record tunnel audit event");
         }
     }
-    pub async fn handle(&self, app: &crate::App, req: Request) -> Response {
+    pub async fn handle(&self, app: &Arc<crate::App>, req: Request) -> Response {
         let response = self
             .api(app, req)
             .await
@@ -520,7 +520,7 @@ impl Auth {
         }
         response
     }
-    async fn api(&self, app: &crate::App, req: Request) -> ApiResult<Response> {
+    async fn api(&self, app: &Arc<crate::App>, req: Request) -> ApiResult<Response> {
         let path = req.uri().path().to_owned();
         let method = req.method().clone();
         if method == Method::GET {
@@ -641,7 +641,7 @@ impl Auth {
                     .names
                     .lock()
                     .unwrap()
-                    .contains(&format!("{name}.{}", app.domain))
+                    .contains_key(&format!("{name}.{}", app.domain))
                 {
                     return Err(ApiError(
                         StatusCode::CONFLICT,

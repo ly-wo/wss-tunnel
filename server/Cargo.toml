@@ -13,6 +13,7 @@ http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tokio-util = { version = "0.7", features = ["rt"] }
 axum = { version = "0.8", features = ["ws"] }
 uuid = { version = "1", features = ["v4"] }
 subtle = "2"

@@ -26,6 +26,8 @@ jobs:
           python3 -m venv /tmp/tunnel-real-ip-venv
           /tmp/tunnel-real-ip-venv/bin/pip install -r tests/requirements-protocols.txt
           /tmp/tunnel-real-ip-venv/bin/python -u tests/real_ip.py
+      - name: Test immediate account disconnect
+        run: /tmp/tunnel-real-ip-venv/bin/python -u tests/revoke.py
       - name: Check Compose and scripts
         run: |
           docker compose --env-file server/.env.example -f server/compose.yaml config --quiet

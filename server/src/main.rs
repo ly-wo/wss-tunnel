@@ -19,12 +19,13 @@ use futures_util::{SinkExt, StreamExt};
 use http::StatusCode;
 use protocol::{MAX_BODY, MAX_PENDING, MAX_WIRE, Packet};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
 use subtle::ConstantTimeEq;
 use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 #[derive(Parser)]
 struct Args {
@@ -60,6 +61,11 @@ struct Tunnel {
     pending: Pending,
     slots: Arc<Semaphore>,
     streams: websocket::Streams,
+    cancel: CancellationToken,
+}
+struct Connection {
+    user_id: Option<i64>,
+    cancel: CancellationToken,
 }
 struct App {
     domain: String,
@@ -68,10 +74,27 @@ struct App {
     token: Vec<u8>,
     auth: auth::Auth,
     trusted_proxies: Vec<ipnet::IpNet>,
-    domain_changes: tokio::sync::Mutex<()>,
+    domain_changes: Arc<tokio::sync::Mutex<()>>,
     tunnels: Mutex<HashMap<String, Tunnel>>,
     slots: Arc<Semaphore>,
-    names: Mutex<HashSet<String>>,
+    names: Mutex<HashMap<String, Connection>>,
+}
+impl App {
+    // Called after the disabling transaction commits, while holding domain_changes.
+    fn disconnect_user(&self, user_id: i64) {
+        let connections: Vec<_> = self
+            .names
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, connection)| connection.user_id == Some(user_id))
+            .map(|(host, connection)| (host.clone(), connection.cancel.clone()))
+            .collect();
+        for (host, cancel) in connections {
+            cancel.cancel();
+            self.tunnels.lock().unwrap().remove(&host);
+        }
+    }
 }
 fn reply(status: StatusCode, message: &str) -> Response {
     (status, message.to_owned()).into_response()
@@ -138,10 +161,10 @@ async fn main() -> Result<()> {
             .map(|s| s.trim().parse())
             .collect::<std::result::Result<Vec<_>, _>>()
             .context("Invalid trusted proxy IP/CIDR")?,
-        domain_changes: tokio::sync::Mutex::new(()),
+        domain_changes: Arc::new(tokio::sync::Mutex::new(())),
         tunnels: Mutex::new(HashMap::new()),
         slots: Arc::new(Semaphore::new(128)),
-        names: Mutex::new(HashSet::new()),
+        names: Mutex::new(HashMap::new()),
     });
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
     eprintln!("Listening on {}; TLS terminates at Traefik", args.bind);
@@ -240,7 +263,7 @@ async fn route(app: Arc<App>, req: Request) -> Response {
         if host.len() > 253 || host == app.connect_domain {
             return reply(StatusCode::BAD_REQUEST, "Reserved or invalid subdomain");
         }
-        if app.names.lock().unwrap().contains(&host) {
+        if app.names.lock().unwrap().contains_key(&host) {
             return reply(StatusCode::CONFLICT, "Subdomain is already in use");
         }
         if let Err(error) = app.auth.reserve(identity.as_ref(), &name).await {
@@ -249,11 +272,19 @@ async fn route(app: Arc<App>, req: Request) -> Response {
                 .await;
             return error.into_response();
         }
-        app.names.lock().unwrap().insert(host.clone());
+        let cancel = CancellationToken::new();
+        app.names.lock().unwrap().insert(
+            host.clone(),
+            Connection {
+                user_id: identity.as_ref().map(|identity| identity.user_id),
+                cancel: cancel.clone(),
+            },
+        );
         drop(changes);
         let lease = NameLease {
             app: app.clone(),
             host,
+            cancel,
         };
         let meta = request_meta::current();
         return ws
@@ -276,6 +307,14 @@ async fn route(app: Arc<App>, req: Request) -> Response {
     let Some(tunnel) = tunnel else {
         return reply(StatusCode::NOT_FOUND, "Tunnel offline or unknown");
     };
+    let cancel = tunnel.cancel.clone();
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => reply(StatusCode::BAD_GATEWAY, "Tunnel disconnected"),
+        response = forward(tunnel, req) => response,
+    }
+}
+async fn forward(tunnel: Tunnel, req: Request) -> Response {
     let Ok(permit) = tunnel.slots.clone().try_acquire_owned() else {
         return reply(StatusCode::SERVICE_UNAVAILABLE, "Tunnel busy");
     };
@@ -364,9 +403,11 @@ impl Drop for PendingGuard {
 struct NameLease {
     app: Arc<App>,
     host: String,
+    cancel: CancellationToken,
 }
 impl Drop for NameLease {
     fn drop(&mut self) {
+        self.cancel.cancel();
         self.app.tunnels.lock().unwrap().remove(&self.host);
         self.app.names.lock().unwrap().remove(&self.host);
     }
@@ -381,6 +422,13 @@ async fn session(
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
     let streams = websocket::Streams::default();
     let host = lease.host.clone();
+    let cancel = lease.cancel.clone();
+    // Serialize publication with disable. The lease already existed before upgrade,
+    // so disabling also cancels connections whose WebSocket upgrade is still pending.
+    let changes = app.domain_changes.lock().await;
+    if cancel.is_cancelled() {
+        return;
+    }
     app.tunnels.lock().unwrap().insert(
         host.clone(),
         Tunnel {
@@ -388,62 +436,77 @@ async fn session(
             pending: pending.clone(),
             slots: Arc::new(Semaphore::new(MAX_PENDING)),
             streams: streams.clone(),
+            cancel: cancel.clone(),
         },
     );
+    drop(changes);
     let name = host
         .strip_suffix(&format!(".{}", app.domain))
         .unwrap_or(&host)
         .to_owned();
-    app.auth
-        .event(identity.as_ref(), "tunnel_connect", "success", &name)
-        .await;
-    let (mut sink, mut stream) = socket.split();
-    let ready = serde_json::to_string(&Packet::Ready {
-        url: format!("{}://{host}", app.public_scheme),
-    })
-    .unwrap();
-    if sink.send(Message::Text(ready.into())).await.is_ok() {
-        let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
-        let mut last_seen = tokio::time::Instant::now();
-        loop {
-            tokio::select! {
-                _=heartbeat.tick()=> {
-                    if last_seen.elapsed()>Duration::from_secs(60) {break;}
-                    if let Some(identity)=&identity && !app.auth.active(identity).await {break;}
-                    if !send(&mut sink,Message::Ping(Vec::new().into())).await {break;}
-                }
-                Some(packet)=rx.recv()=> {
-                    if !send(&mut sink,Message::Text(serde_json::to_string(&packet).unwrap().into())).await {break;}
-                }
-                message=stream.next()=>match message {
-                    Some(Ok(Message::Text(text)))=> {
-                        last_seen=tokio::time::Instant::now();
-                        match serde_json::from_str::<Packet>(&text) {
-                            Ok(packet @ (Packet::Response { .. }|Packet::WsOpened{..}))=> {
-                                let id=match &packet {Packet::Response{id,..}|Packet::WsOpened{id,..}=>id,_=>unreachable!()};
-                                let tx=pending.lock().unwrap().remove(id);
-                                if let Some(tx)=tx {let _=tx.send(packet);}
-                            }
-                            Ok(Packet::WsFrame{id,frame})=>websocket::dispatch(&streams,&id,frame),
-                            Ok(Packet::WsClose{id})=> {
-                                streams.lock().unwrap().remove(&id);
-                                pending.lock().unwrap().remove(&id);
-                            }
-                            _=>break,
-                        }
+    let run = async {
+        app.auth
+            .event(identity.as_ref(), "tunnel_connect", "success", &name)
+            .await;
+        let (mut sink, mut stream) = socket.split();
+        let ready = serde_json::to_string(&Packet::Ready {
+            url: format!("{}://{host}", app.public_scheme),
+        })
+        .unwrap();
+        if sink.send(Message::Text(ready.into())).await.is_ok() {
+            let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
+            let mut last_seen = tokio::time::Instant::now();
+            loop {
+                tokio::select! {
+                    _=heartbeat.tick()=> {
+                        if last_seen.elapsed()>Duration::from_secs(60) {break;}
+                        if let Some(identity)=&identity && !app.auth.active(identity).await {break;}
+                        if !send(&mut sink,Message::Ping(Vec::new().into())).await {break;}
                     }
-                    Some(Ok(Message::Pong(_)))=>last_seen=tokio::time::Instant::now(),
-                    Some(Ok(Message::Ping(p)))=> {if !send(&mut sink,Message::Pong(p)).await {break;}},
-                    _=>break,
+                    Some(packet)=rx.recv()=> {
+                        if !send(&mut sink,Message::Text(serde_json::to_string(&packet).unwrap().into())).await {break;}
+                    }
+                    message=stream.next()=>match message {
+                        Some(Ok(Message::Text(text)))=> {
+                            last_seen=tokio::time::Instant::now();
+                            match serde_json::from_str::<Packet>(&text) {
+                                Ok(packet @ (Packet::Response { .. }|Packet::WsOpened{..}))=> {
+                                    let id=match &packet {Packet::Response{id,..}|Packet::WsOpened{id,..}=>id,_=>unreachable!()};
+                                    let tx=pending.lock().unwrap().remove(id);
+                                    if let Some(tx)=tx {let _=tx.send(packet);}
+                                }
+                                Ok(Packet::WsFrame{id,frame})=>websocket::dispatch(&streams,&id,frame),
+                                Ok(Packet::WsClose{id})=> {
+                                    streams.lock().unwrap().remove(&id);
+                                    pending.lock().unwrap().remove(&id);
+                                }
+                                _=>break,
+                            }
+                        }
+                        Some(Ok(Message::Pong(_)))=>last_seen=tokio::time::Instant::now(),
+                        Some(Ok(Message::Ping(p)))=> {if !send(&mut sink,Message::Pong(p)).await {break;}},
+                        _=>break,
+                    }
                 }
             }
         }
+    };
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {},
+        _ = run => {},
     }
+    let outcome = if cancel.is_cancelled() {
+        "revoked"
+    } else {
+        "closed"
+    };
+    cancel.cancel();
     app.tunnels.lock().unwrap().remove(&host);
     pending.lock().unwrap().clear();
     streams.lock().unwrap().clear();
     app.auth
-        .event(identity.as_ref(), "tunnel_disconnect", "closed", &name)
+        .event(identity.as_ref(), "tunnel_disconnect", outcome, &name)
         .await;
 }
 async fn send<S>(sink: &mut S, message: Message) -> bool

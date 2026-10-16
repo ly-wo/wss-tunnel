@@ -138,12 +138,14 @@ def main():
             print('PASS: live default/personal quotas, offline reservations, lower-limit reconnect and validation', flush=True)
 
             live = client('first', token=token)
+            password_live = client('second', username='alice')
             api(f'admin/users/{uid}', 'PUT', {'disabled': True, 'domain_limit_override': None}, admin, expected=204)
+            wait_for(lambda: live.poll() is not None and password_live.poll() is not None, timeout=2)
+            assert all(d['status'] == 'offline' for d in api(f'admin/users/{uid}/domains', session=admin)['domains'])
             api('me', session=alice, expected=401)
             login('alice', expected=401)
             client('second', token=token, rejected='401')
             client('second', username='alice', rejected='401')
-            wait_for(lambda: live.poll() is not None, timeout=35)
             api(f'admin/users/{uid}', 'PUT', {'disabled': False, 'domain_limit_override': None}, admin, expected=204)
             api('me', session=alice, expected=401)  # old sessions remain revoked
             stop(srv)

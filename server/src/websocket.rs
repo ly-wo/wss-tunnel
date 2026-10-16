@@ -99,7 +99,14 @@ pub async fn upgrade(
         .max_message_size(MAX_BODY)
         .max_frame_size(MAX_BODY)
         .protocols(selected);
-    let mut response = ws.on_upgrade(move |socket| bridge(socket, in_rx, guard));
+    let mut response = ws.on_upgrade(move |socket| async move {
+        let cancel = guard.tunnel.cancel.clone();
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {},
+            _ = bridge(socket, in_rx, guard) => {},
+        }
+    });
     response.headers_mut().extend(headers);
     response
 }

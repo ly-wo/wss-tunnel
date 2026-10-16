@@ -27,7 +27,7 @@ docker compose pull
 docker compose up -d
 ```
 
-默认镜像为 `ghcr.io/ly-wo/wss-tunnel:0.2.1`，可通过 `.env` 的 `TUNNEL_IMAGE` 更改。源码构建需保留完整项目，在 `server` 目录执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
+默认镜像为 `ghcr.io/ly-wo/wss-tunnel:0.2.2`，可通过 `.env` 的 `TUNNEL_IMAGE` 更改。源码构建需保留完整项目，在 `server` 目录执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
 
 `.env` 示例：
 
@@ -104,10 +104,10 @@ docker compose exec tunnel tunnel-server --bootstrap-admin admin --bootstrap-onl
 后台包含：
 
 - **配置**：注册开关、每账号默认名额（初始 10，范围 0–1000）、审计保留天数（1–3650）、全站每分钟注册与密码尝试次数（1–10000）。保存立即生效并持久化。缩短保留期会清理超期记录。
-- **用户**：搜索、分页，查看注册时间/IP、最近密码登录时间/IP、最近活动 IP/时间、客户端 User-Agent、认证方式和 Token 前缀；查看所属域名在线状态，设置个人名额或恢复全局默认，停用/启用账号。管理员不能停用自己。停用会立即使账号会话和新连接失效；已有隧道通常在 20 秒内断开，发送阻塞时可能再增加最多 10 秒。
+- **用户**：搜索、分页，查看注册时间/IP、最近密码登录时间/IP、最近活动 IP/时间、客户端 User-Agent、认证方式和 Token 前缀；查看所属域名在线状态，设置个人名额或恢复全局默认，停用/启用账号。管理员不能停用自己。停用会立即撤销账号会话，阻止新连接，并主动断开该账号全部密码/Token 隧道及其已建立的 WebSocket 转发，终止等待中的 HTTP 请求；不再等待心跳检查。正在握手的隧道也会被撤销。其他账号不受影响。
 - **审计**：按用户名、来源 IP、事件、结果及时间范围过滤，游标翻页。包含账号事件、管理操作及连接入口/API 请求的时间、请求 ID、来源 IP、直连 IP、认证方式、方法/路径、User-Agent；接口请求还记录 HTTP 状态、耗时和可用的失败原因。隧道生命周期与握手通过请求 ID 关联，配置和用户设置修改记录前后值。旧记录缺少 IP 时显示空值，不推测补齐。
 
-降低名额不会删除已有域名，已持有名称仍可重连；新增名称受新上限约束，名额为 0 表示禁止新申请。离线域名仍占名额。禁用后重新启用不会恢复旧网页登录会话。
+降低名额不会删除已有域名，已持有名称仍可重连；新增名称受新上限约束，名额为 0 表示禁止新申请。离线域名仍占名额。禁用后重新启用不会恢复旧网页登录会话或已撤销的连接；客户端必须重新连接。
 
 ### Traefik 后的真实 IP
 
@@ -140,7 +140,7 @@ docker compose up -d --force-recreate tunnel
 
 审计不保存认证头、密码、完整 Token、查询参数、请求正文或转发业务内容。它是存于本地 SQLite 的操作记录，不是防篡改日志或逐条业务流量日志。数据库访问者可修改记录；长期外部归档需另行接入。
 
-验证：`make admin-test` 覆盖管理员隔离、旧库迁移、动态名额、停用撤销、可信代理与伪造 IP、审计筛选及持久化。
+验证：`make admin-test` 覆盖管理员隔离、旧库迁移、动态名额、停用撤销、可信代理与伪造 IP、审计筛选及持久化。`make revoke-test PYTHON=<已安装 tests/requirements-protocols.txt 的 Python>` 验证同账号密码/Token 隧道、已有 WebSocket 两端、在途 HTTP 在 2 秒断言窗口内终止，其他账号保持可用，重新启用只允许新连接。
 `make real-ip-test PYTHON=<已安装 tests/requirements-protocols.txt 的 Python>` 使用隔离的 Traefik 容器和启用证书校验的 HTTPS/WSS，检查可信/不可信代理下，用户和审计 IP、HTTP 转发头、WebSocket 握手头一致，并检查伪造 IP 头被覆盖。Docker Desktop 下测到的入口 IP 可能来自虚拟机/NAT，此测试不能代替公网来源 IP 验证。
 
 ## 客户端
@@ -239,7 +239,7 @@ make protocols-test PYTHON=.venv/bin/python
 TUNNEL_TEST_IMAGE=wss-tunnel:local make protocols-test PYTHON=.venv/bin/python
 ```
 
-Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-image`、`make logs`、`make package`；`make client PORT=3000 NAME=demo` 或 `make client LOCAL_TARGET=https://localhost:8443` 可启动客户端。发布入口为 `make tag VERSION=0.2.1` 与 `make publish TAG=v0.2.1`，会实际触发对应 GitHub Action。
+Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-image`、`make logs`、`make package`；`make client PORT=3000 NAME=demo` 或 `make client LOCAL_TARGET=https://localhost:8443` 可启动客户端。发布入口为 `make tag VERSION=0.2.2` 与 `make publish TAG=v0.2.2`，会实际触发对应 GitHub Action。
 
 两端是同一 workspace 的子包，通过根目录 `protocol.rs` 共享协议；开发或 Docker 构建需保留完整项目，运行时客户端和服务端二进制可独立分发。集成测试使用临时目录和独立 Traefik 容器，不修改生产服务或本机信任库。验证状态见 `VALIDATION.md`。
 
@@ -255,7 +255,7 @@ Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-i
 
 ## Android 客户端
 
-`android/` 为独立 Gradle 工程（`com.wlzxj.tunnel`，versionName `0.2.1`）。隧道转发复用 `tunnel-client` 库与 `client/jni` 中的 `libtunnel_client_jni.so`，界面为 Jetpack Compose，账号 API 与桌面网页一致。
+`android/` 为独立 Gradle 工程（`com.wlzxj.tunnel`，versionName `0.2.2`）。隧道转发复用 `tunnel-client` 库与 `client/jni` 中的 `libtunnel_client_jni.so`，界面为 Jetpack Compose，账号 API 与桌面网页一致。
 
 ### 构建环境（通用）
 
