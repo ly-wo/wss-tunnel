@@ -17,6 +17,10 @@ jobs:
       - run: cargo clippy --workspace --locked -- -D warnings
       - run: cargo test --workspace --locked
       - run: cargo build --workspace --locked
+      - name: Test accounts, token rotation, domain ownership and audit
+        run: python3 -u tests/accounts.py
+      - name: Test administrator settings, quota and detailed audit
+        run: python3 -u tests/admin.py
       - name: Check Compose and scripts
         run: |
           docker compose --env-file server/.env.example -f server/compose.yaml config --quiet

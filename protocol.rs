@@ -16,6 +16,25 @@ pub enum Packet {
         headers: Vec<(String, String)>,
         body: String,
     },
+    WsOpen {
+        id: String,
+        path: String,
+        headers: Vec<(String, String)>,
+        protocols: Vec<String>,
+    },
+    WsOpened {
+        id: String,
+        status: u16,
+        headers: Vec<(String, String)>,
+        protocol: Option<String>,
+    },
+    WsFrame {
+        id: String,
+        frame: WireFrame,
+    },
+    WsClose {
+        id: String,
+    },
     Response {
         id: String,
         status: u16,
@@ -23,6 +42,16 @@ pub enum Packet {
         body: String,
     },
 }
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+// Both text (UTF-8) and binary payloads use base64 to bound JSON expansion.
+pub enum WireFrame {
+    Text { data: String },
+    Binary { data: String },
+    Close { code: u16, reason: String },
+}
+// Each WebSocket leg handles Ping/Pong locally; text, binary and close travel
+// across the multiplexed tunnel. Handshake fields are regenerated at each leg.
 // Remove hop-by-hop headers, including fields named by Connection. Base64 keeps
 // opaque HTTP header values intact, including repeated Set-Cookie headers.
 pub fn headers(map: &HeaderMap) -> Vec<(String, String)> {
@@ -48,6 +77,11 @@ pub fn headers(map: &HeaderMap) -> Vec<(String, String)> {
                     | "upgrade"
                     | "content-length"
                     | "host"
+                    | "sec-websocket-key"
+                    | "sec-websocket-version"
+                    | "sec-websocket-accept"
+                    | "sec-websocket-extensions"
+                    | "sec-websocket-protocol"
             ) && !nominated.iter().any(|v| v == name.as_str())
         })
         .map(|(k, v)| (k.to_string(), STANDARD.encode(v.as_bytes())))

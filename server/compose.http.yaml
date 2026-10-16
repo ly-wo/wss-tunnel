@@ -1,0 +1,13 @@
+# Optional plaintext HTTP/WS routes; HTTPS/WSS routes remain enabled.
+# docker compose -f compose.yaml -f compose.http.yaml up -d --pull always
+services:
+  tunnel:
+    labels:
+      traefik.http.routers.rust-tunnel-connect-http.rule: Host(`${CONNECT_DOMAIN}`)
+      traefik.http.routers.rust-tunnel-connect-http.entrypoints: ${TRAEFIK_HTTP_ENTRYPOINT:-web}
+      traefik.http.routers.rust-tunnel-connect-http.priority: "100"
+      traefik.http.routers.rust-tunnel-connect-http.service: rust-tunnel
+      traefik.http.routers.rust-tunnel-public-http.rule: HostRegexp(`^[a-z0-9-]+\.\Q${TUNNEL_DOMAIN}\E$$`)
+      traefik.http.routers.rust-tunnel-public-http.entrypoints: ${TRAEFIK_HTTP_ENTRYPOINT:-web}
+      traefik.http.routers.rust-tunnel-public-http.priority: "10"
+      traefik.http.routers.rust-tunnel-public-http.service: rust-tunnel

@@ -10,7 +10,13 @@ services:
       TUNNEL_DOMAIN: ${TUNNEL_DOMAIN:?Set TUNNEL_DOMAIN}
       CONNECT_DOMAIN: ${CONNECT_DOMAIN:?Set CONNECT_DOMAIN}
       TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
+      TUNNEL_ENABLE_LEGACY_TOKEN: ${TUNNEL_ENABLE_LEGACY_TOKEN:-false}
       TUNNEL_BIND: 0.0.0.0:8080
+      TUNNEL_DATABASE: /data/auth.sqlite3
+      TUNNEL_TRUSTED_PROXIES: ${TUNNEL_TRUSTED_PROXIES:-}
+      TUNNEL_ALLOW_REGISTRATION: ${TUNNEL_ALLOW_REGISTRATION:-true}
+      TUNNEL_PUBLIC_SCHEME: ${TUNNEL_PUBLIC_SCHEME:-https}
+    volumes: [tunnel_data:/data]
     secrets: [tunnel_token]
     networks: [traefik]
     labels:
@@ -38,3 +44,6 @@ networks:
 secrets:
   tunnel_token:
     file: ./secrets/token
+
+volumes:
+  tunnel_data:

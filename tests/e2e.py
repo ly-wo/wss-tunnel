@@ -70,7 +70,7 @@ try:
   subprocess.run(['docker','network','create',network],check=True,stdout=subprocess.DEVNULL)
   subprocess.run(['docker','run','--rm','-d','--name',server_name,'--network',network,'--read-only','--cap-drop=ALL','--security-opt=no-new-privileges:true','-v',str(w/'token')+':/run/secrets/token:ro',image,'--domain','tunnel.test','--connect-domain','localhost','--token-file','/run/secrets/token'],check=True,stdout=subprocess.DEVNULL)
  else:
-  start([str(bins/'tunnel-server'),'--domain','tunnel.test','--connect-domain','localhost','--bind','0.0.0.0:18000','--token-file',str(w/'token')],'server.log')
+  start([str(bins/'tunnel-server'),'--domain','tunnel.test','--connect-domain','localhost','--bind','0.0.0.0:18000','--token-file',str(w/'token'),'--database',str(w/'accounts.sqlite3')],'server.log')
  subprocess.run(['docker','run','--rm','-d','--name','rust-wss-test-'+str(os.getpid()),*(['--network',network] if image else []),'-p','127.0.0.1:18443:443','-v',str(w)+':/verify:ro','traefik:v3.7.14','--entrypoints.websecure.address=:443','--providers.file.filename=/verify/dynamic.yml'],check=True,stdout=subprocess.DEVNULL)
  time.sleep(1)
  p,host=client();assert re.fullmatch('[a-f0-9]{16}.tunnel.test',host);print('random subdomain PASS')
@@ -93,6 +93,27 @@ try:
   time.sleep(.1)
  else:raise AssertionError('name not released')
  client('demo',18301,'reused.log');print('disconnect cleanup + name reuse PASS')
+ # Verify account APIs and password/individual-token authentication over real TLS.
+ def account_api(path,payload,session=None):
+  args=['curl','--silent','--show-error','--fail-with-body','--cacert',str(w/'ca.pem'),'https://localhost:18443/_tunnel/api/'+path,'-H','Content-Type: application/json','--data-binary','@-']
+  if session:args+=['-H','Authorization: Bearer '+session]
+  return json.loads(subprocess.check_output(args,input=json.dumps(payload).encode()))
+ credentials={'username':'tls-user','password':'test-password-over-real-tls'}
+ account_api('register',credentials)
+ session=account_api('login',credentials)['session']
+ account_token=account_api('token',{},session)['token']
+ (w/'account-token').write_text(account_token);(w/'password').write_text(credentials['password'])
+ for mode in ['password','token']:
+  args=[str(bins/'tunnel-client'),'18300','--server','wss://localhost:18443','--ca-cert',str(w/'ca.pem'),'--name','tls-'+mode]
+  args+=['--username','tls-user','--password-file',str(w/'password')] if mode=='password' else ['--token-file',str(w/'account-token')]
+  process=start(args,'tls-'+mode+'.log')
+  for _ in range(100):
+   if 'https://' in (w/('tls-'+mode+'.log')).read_text():break
+   assert process.poll() is None,(w/('tls-'+mode+'.log')).read_text()
+   time.sleep(.1)
+  else:raise AssertionError('TLS account connection timeout')
+  assert curl('tls-'+mode+'.tunnel.test')[0]==200
+ print('account registration/login/token + password and token WSS through Traefik PASS')
  servers[0].shutdown();servers[0].server_close();assert curl(host)[0]==502;print('local service unavailable HTTP 502 PASS')
  print('All tests use WSS/HTTPS through Traefik with certificate validation enabled.')
 finally:

@@ -1,5 +1,7 @@
 #[path = "../../protocol.rs"]
 mod protocol;
+mod target;
+mod websocket;
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use clap::Parser;
@@ -12,16 +14,29 @@ use tokio_tungstenite::{
     tungstenite::{Message, client::IntoClientRequest, protocol::WebSocketConfig},
 };
 #[derive(Parser)]
-#[command(about = "Expose a local HTTP port through your WSS tunnel server")]
+#[command(about = "Expose local HTTP(S) and WebSocket services through a WS(S) tunnel")]
 struct Args {
-    #[arg(value_parser=clap::value_parser!(u16).range(1..))]
-    port: u16,
+    #[arg(value_parser=clap::value_parser!(u16).range(1..), required_unless_present="target", conflicts_with="target")]
+    port: Option<u16>,
+    #[arg(long, env = "TUNNEL_TARGET")]
+    target: Option<String>,
+    #[arg(long, env = "TUNNEL_LOCAL_CA_CERT")]
+    local_ca_cert: Option<std::path::PathBuf>,
     #[arg(long, env = "TUNNEL_ENDPOINT")]
     server: String,
     #[arg(long)]
     name: Option<String>,
     #[arg(long, env = "TUNNEL_TOKEN_FILE")]
-    token_file: std::path::PathBuf,
+    token_file: Option<std::path::PathBuf>,
+    #[arg(long, env = "TUNNEL_USERNAME")]
+    username: Option<String>,
+    #[arg(long, env = "TUNNEL_PASSWORD_FILE", requires = "username")]
+    password_file: Option<std::path::PathBuf>,
+    #[arg(
+        long,
+        help = "Allow password authentication over plaintext WS (local testing only)"
+    )]
+    allow_insecure_auth: bool,
     #[arg(long, env = "TUNNEL_CA_CERT")]
     ca_cert: Option<std::path::PathBuf>,
 }
@@ -29,23 +44,13 @@ struct Args {
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let args = Args::parse();
-    let mut url = reqwest::Url::parse(&args.server)?;
-    ensure!(
-        url.scheme() == "wss" && url.host_str().is_some(),
-        "Server must use wss://"
-    );
-    ensure!(
-        url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none(),
-        "Use a WSS origin without credentials, query or fragment"
-    );
-    ensure!(
-        url.path() == "/" || url.path() == "/_tunnel/ws",
-        "Server must be an origin or /_tunnel/ws URL"
-    );
-    url.set_path("/_tunnel/ws");
+    let target = target::Target::new(&args.target.unwrap_or_else(|| {
+        format!(
+            "http://127.0.0.1:{}",
+            args.port.expect("Clap requires port or target")
+        )
+    }))?;
+    let mut url = target::server_url(&args.server)?;
     if let Some(name) = &args.name {
         ensure!(
             protocol::valid_name(name),
@@ -53,51 +58,71 @@ async fn main() -> Result<()> {
         );
         url.query_pairs_mut().append_pair("name", name);
     }
-    let token = std::fs::read_to_string(&args.token_file).context("Read token file")?;
-    ensure!(
-        token.trim().len() >= 32,
-        "Token must contain at least 32 bytes"
-    );
+    let authorization = if let Some(username) = &args.username {
+        ensure!(
+            url.scheme() == "wss" || args.allow_insecure_auth,
+            "Password connections require WSS; use --allow-insecure-auth only for local testing"
+        );
+        ensure!(
+            !username.contains(':') && !username.is_empty(),
+            "Invalid username"
+        );
+        let password = if let Some(path) = &args.password_file {
+            std::fs::read_to_string(path)
+                .context("Read password file")?
+                .trim_end_matches(['\r', '\n'])
+                .to_owned()
+        } else {
+            rpassword::prompt_password("Password: ")?
+        };
+        format!(
+            "Basic {}",
+            STANDARD.encode(format!("{username}:{password}"))
+        )
+    } else {
+        let path = args
+            .token_file
+            .as_ref()
+            .context("Provide --username or --token-file")?;
+        let token = std::fs::read_to_string(path).context("Read token file")?;
+        ensure!(
+            token.trim().len() >= 32,
+            "Token must contain at least 32 bytes"
+        );
+        format!("Bearer {}", token.trim())
+    };
     let mut request = url.as_str().into_client_request()?;
     request
         .headers_mut()
-        .insert("authorization", format!("Bearer {}", token.trim()).parse()?);
-    let mut roots = rustls::RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    if let Some(path) = args.ca_cert {
-        let mut reader = std::io::BufReader::new(std::fs::File::open(path)?);
-        for cert in rustls_pemfile::certs(&mut reader) {
-            roots.add(cert?)?;
-        }
-    }
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let tls = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+        .insert("authorization", authorization.parse()?);
+    let tls = tls_config(args.ca_cert.as_deref())?;
+    let local_tls = tls_config(args.local_ca_cert.as_deref())?;
     let mut config = WebSocketConfig::default();
     config.max_message_size = Some(MAX_WIRE);
     config.max_frame_size = Some(MAX_WIRE);
     let (socket, _) = tokio::time::timeout(
         Duration::from_secs(15),
-        connect_async_tls_with_config(
-            request,
-            Some(config),
-            false,
-            Some(Connector::Rustls(Arc::new(tls))),
-        ),
+        connect_async_tls_with_config(request, Some(config), false, Some(Connector::Rustls(tls))),
     )
     .await
-    .context("WSS connection timed out")??;
-    let http = reqwest::Client::builder()
+    .context("WebSocket tunnel connection timed out")??;
+    let mut http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
-        .timeout(Duration::from_secs(30))
-        .build()?;
+        .timeout(Duration::from_secs(30));
+    if let Some(path) = args.local_ca_cert.as_deref() {
+        let mut reader = std::io::BufReader::new(std::fs::File::open(path)?);
+        for cert in rustls_pemfile::certs(&mut reader) {
+            http = http.add_root_certificate(reqwest::Certificate::from_der(cert?.as_ref())?);
+        }
+    }
+    let http = http.build()?;
+    let streams = websocket::Streams::default();
     let (mut sink, mut stream) = socket.split();
     let first = tokio::time::timeout(Duration::from_secs(10), stream.next()).await?;
     match first {
         Some(Ok(Message::Text(text))) => match serde_json::from_str::<Packet>(&text)? {
-            Packet::Ready { url } => println!("{url} -> http://127.0.0.1:{}", args.port),
+            Packet::Ready { url } => println!("{url} -> {}", target.display()),
             _ => bail!("Unexpected handshake"),
         },
         _ => bail!("Server did not assign a public URL"),
@@ -126,9 +151,23 @@ async fn main() -> Result<()> {
                             let response=failure(id.clone(),503,"Local concurrency limit reached");
                             tokio::time::timeout(Duration::from_secs(10),sink.send(Message::Text(serde_json::to_string(&response)?.into()))).await??;
                         } else {
-                            let http=http.clone(); let tx=tx.clone(); let port=args.port;
-                            jobs.spawn(async move { let result=forward(http,port,packet).await; let _=tx.send(result).await; });
+                            let http=http.clone(); let tx=tx.clone(); let target=target.clone();
+                            jobs.spawn(async move { let result=forward(http,target,packet).await; let _=tx.send(result).await; });
                         }
+                    } else if let Packet::WsOpen {ref id,..}=packet {
+                        if jobs.len()>=MAX_PENDING {
+                            let response=Packet::WsOpened{id:id.clone(),status:503,headers:vec![],protocol:None};
+                            tokio::time::timeout(Duration::from_secs(10),sink.send(Message::Text(serde_json::to_string(&response)?.into()))).await??;
+                        } else {
+                            let (in_tx,in_rx)=websocket::channel();
+                            ensure!(!streams.lock().unwrap().contains_key(id),"Duplicate WebSocket stream id");
+                            streams.lock().unwrap().insert(id.clone(),in_tx);
+                            jobs.spawn(websocket::bridge(target.clone(),local_tls.clone(),packet,streams.clone(),tx.clone(),in_rx));
+                        }
+                    } else if let Packet::WsFrame{id,frame}=packet {
+                        websocket::dispatch(&streams,&id,frame);
+                    } else if let Packet::WsClose{id}=packet {
+                        streams.lock().unwrap().remove(&id);
                     } else {bail!("Unexpected server packet");}
                 }
                 Some(Ok(Message::Ping(p)))=> { tokio::time::timeout(Duration::from_secs(10),sink.send(Message::Pong(p))).await??; }
@@ -151,7 +190,7 @@ fn failure(id: String, status: u16, message: &str) -> Packet {
         body: STANDARD.encode(message),
     }
 }
-async fn forward(http: reqwest::Client, port: u16, packet: Packet) -> Packet {
+async fn forward(http: reqwest::Client, target: target::Target, packet: Packet) -> Packet {
     let Packet::Request {
         id,
         method,
@@ -164,7 +203,7 @@ async fn forward(http: reqwest::Client, port: u16, packet: Packet) -> Packet {
     };
     async fn run(
         http: reqwest::Client,
-        port: u16,
+        target: target::Target,
         method: String,
         path: String,
         headers: Vec<(String, String)>,
@@ -178,7 +217,7 @@ async fn forward(http: reqwest::Client, port: u16, packet: Packet) -> Packet {
         ensure!(data.len() <= MAX_BODY, "Request too large");
         let method = reqwest::Method::from_bytes(method.as_bytes())?;
         ensure!(method != reqwest::Method::CONNECT, "CONNECT unsupported");
-        let url = format!("http://127.0.0.1:{port}{path}");
+        let url = target.url(&path, false)?;
         let response = http
             .request(method, url)
             .headers(protocol::restore(headers)?)
@@ -202,7 +241,7 @@ async fn forward(http: reqwest::Client, port: u16, packet: Packet) -> Packet {
     }
     match tokio::time::timeout(
         Duration::from_secs(30),
-        run(http, port, method, path, headers, body),
+        run(http, target, method, path, headers, body),
     )
     .await
     {
@@ -218,4 +257,21 @@ async fn forward(http: reqwest::Client, port: u16, packet: Packet) -> Packet {
         }
         Err(_) => failure(id, 504, "Local service timed out"),
     }
+}
+
+fn tls_config(path: Option<&std::path::Path>) -> Result<Arc<rustls::ClientConfig>> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    if let Some(path) = path {
+        let mut reader = std::io::BufReader::new(std::fs::File::open(path)?);
+        for cert in rustls_pemfile::certs(&mut reader) {
+            roots.add(cert?)?;
+        }
+    }
+    Ok(Arc::new(
+        rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    ))
 }
