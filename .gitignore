@@ -6,7 +6,15 @@
 /dist/
 __pycache__/
 /.venv/
-**/data/
+/server/data/
+!android/app/src/main/java/com/wlzxj/tunnel/data/
+!android/app/src/main/java/com/wlzxj/tunnel/data/**
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+/android/.gradle/
+/android/**/build/
+/android/local.properties
+/android/app/src/main/jniLibs/
+/.idea/
+/.ai-handoff/

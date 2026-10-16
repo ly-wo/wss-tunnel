@@ -235,3 +235,81 @@ Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-i
 - 镜像：`ghcr.io/ly-wo/wss-tunnel:dev` 为 main 开发版；正式 tag 发布后提供固定版本与 `latest`。
 
 下载二进制后可直接执行 `tunnel-client 3000 --server wss://connect.example.com --token-file ./token --name demo`，无需安装 Rust。省略 `--name` 自动分配随机子域名。
+
+## Android 客户端
+
+`android/` 为独立 Gradle 工程（`com.wlzxj.tunnel`，versionName `0.2.0`）。隧道转发复用 `tunnel-client` 库与 `client/jni` 中的 `libtunnel_client_jni.so`，界面为 Jetpack Compose，账号 API 与桌面网页一致。
+
+### 构建环境（通用）
+
+| 组件 | 版本 / 说明 |
+| --- | --- |
+| JDK | 17（Temurin 等均可） |
+| Android SDK | Platform **36**、Build-Tools **36.x**（`sdkmanager` 安装） |
+| Android NDK | **28.2.13676358** |
+| Rust | 仓库 `rust-toolchain.toml` 指定版本；`rustup target add aarch64-linux-android` |
+| cargo-ndk | `cargo install cargo-ndk --version 4.1.2 --locked` |
+
+将 SDK/NDK 加入环境变量（路径按本机安装位置替换）：
+
+```bash
+export JAVA_HOME=/path/to/jdk-17
+export ANDROID_HOME=/path/to/Android/sdk          # 部分工具亦认 ANDROID_SDK_ROOT
+export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+```
+
+可选：单独预构建 JNI（输出到 `android/app/src/main/jniLibs/`）：
+
+```bash
+bash scripts/build-android-jni.sh
+```
+
+**Gradle 的 `preBuild` 会自动执行 `buildJni`**，一般只需在 `android/` 目录运行：
+
+```bash
+cd android
+./gradlew testDebugUnitTest assembleDebug
+```
+
+产物：`android/app/build/outputs/apk/debug/app-debug.apk`（默认 **arm64-v8a**）。
+
+**x86_64 模拟器库：** 在同一 Gradle 命令上加 `-PincludeX86=true`（会设置 `BUILD_ANDROID_X86_64=1` 并编入 `x86_64` ABI）。切换 arm64 ↔ x86 构建时 Gradle 会按 `includeX86` 输入重新跑 JNI，避免误用 UP-TO-DATE 的旧库。
+
+### 安装与运行
+
+- Debug 包：`applicationId` 为 `com.wlzxj.tunnel.debug`，可直接 `adb install -r app/build/outputs/apk/debug/app-debug.apk`。
+- **Release 构建**默认要求 **HTTPS** 接入地址；校验服务器证书和域名。
+- **Debug 构建**可在连接页勾选「允许本地 HTTP 接入（127.0.0.1 / 10.0.2.2）」：仅对回环/模拟器地址允许明文 HTTP/WS，用于本机或模拟器联调；HTTPS/WSS 仍校验证书，Release 不提供此开关。
+
+### 仪器测试（fixture）
+
+`connectedDebugAndroidTest` 中账号 API、真实隧道转发、Compose 三 Tab 等用例默认连本机 fixture：
+
+| 参数 | 默认 |
+| --- | --- |
+| `tunnel_origin` | `http://127.0.0.1:19092`（连接/账号 API） |
+| `tunnel_target` | `http://127.0.0.1:19093`（隧道后端，`/hello.txt` 返回固定正文） |
+
+**真实依赖（非 mock）：**
+
+1. 在开发机上运行与仓库协议兼容的隧道 **服务端 + 目标 HTTP**（监听上述端口；目标 `/hello.txt` 正文须包含 `Android JNI forwarding verified`）。
+2. 模拟器/设备上：`adb reverse tcp:19092 tcp:19092` 与 `adb reverse tcp:19093 tcp:19093`，使应用内 `127.0.0.1` 指回主机。
+3. Fixture 必须开放注册（测试会创建随机账号），且连接域名应与接入地址匹配，例如 `--connect-domain 127.0.0.1`。
+4. 隧道 HTTP 断言经 **origin + `Host: <公网子域>`** 访问，不依赖 `*.tunnel.test` 公网 DNS。
+
+```bash
+cd android
+adb reverse tcp:19092 tcp:19092
+adb reverse tcp:19093 tcp:19093
+./gradlew connectedDebugAndroidTest
+# 多设备时：ANDROID_SERIAL=<serial> ./gradlew connectedDebugAndroidTest
+```
+
+可在 `android/app/build.gradle.kts` 的 `testInstrumentationRunnerArguments` 或 Gradle 传参覆盖 `tunnel_origin` / `tunnel_target`。
+
+**近期本机验证（仅供参考）：** API 36 模拟器上 **7/7 单元测试、10/10 设备测试通过，Debug APK 构建成功**（含 Compose 三 Tab、Token/密码+指定子域名联调、服务代际与 JNI 清理）。API 37 测试版模拟器上也验证过包含 Compose 交互的 9 项设备用例。详细边界见 [Android 验证记录](docs/android-validation.md)。
+
+Android Actions：main 的相关源码变更、PR 和手动运行会构建 ARM64 Debug APK，执行单元测试，并上传 `wss-tunnel-android-debug`（APK + SHA256）及测试报告，保留14天。在 [Android Actions](https://github.com/ly-wo/wss-tunnel/actions/workflows/android.yml) 中打开成功的运行，从 Artifacts 下载。
+
+后续 `vX.Y.Z` Release 也会构建安卓端，将 APK 和校验文件附到 Release，并加入总校验清单。当前提供 Debug 测试包，使用构建环境的调试签名；不同构建的签名可能不同，覆盖安装失败时需卸载旧包（会清除应用数据）。正式签名与商店发布尚未配置。

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WSS Tunnel</string>
+    <string name="channel_tunnel">隧道连接</string>
+    <string name="action_stop_tunnel">停止隧道</string>
+</resources>

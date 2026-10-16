@@ -3,7 +3,17 @@ name = "tunnel-client"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+
+[lib]
+name = "tunnel_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tunnel-client"
+path = "src/main.rs"
+
 [dependencies]
+tokio-util = { version = "0.7", features = ["rt"] }
 anyhow.workspace = true
 base64.workspace = true
 clap.workspace = true

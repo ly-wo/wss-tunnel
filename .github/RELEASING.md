@@ -8,6 +8,8 @@
 | 推送 main / 手动运行 CI（main） | 上述检查与产物；GHCR 发布多架构 `dev` 和 `sha-完整提交号` 镜像 |
 | 推送 `vX.Y.Z` tag | 再次检查；五平台二进制；Release 附件及 SHA256SUMS；发布 `X.Y.Z`、`X.Y`、`latest`、`sha-完整提交号` 镜像 |
 
+Android 相关 main 变更、PR 和手动 Android 工作流会上传 ARM64 Debug APK、SHA256 与单元测试报告；产物保留14天。tag Release 会等待安卓构建成功，将 APK 和校验文件加入附件与 SHA256SUMS。安卓包使用调试签名，不属于正式商店发行版；不同运行可能需要卸载后重装。
+
 二进制平台：Linux x64 / ARM64（glibc 2.35+）、macOS Intel / Apple Silicon、Windows x64。每个压缩包包含客户端和服务端、配置示例与 README；Windows 使用 zip，其他平台使用 tar.gz。Actions 产物保留 14 天，正式 Release 附件长期保留。macOS/Windows 二进制未签名或公证。
 
 镜像为服务端镜像 `ghcr.io/ly-wo/wss-tunnel`，支持 `linux/amd64`、`linux/arm64`，附带 SBOM 和构建 provenance。客户端仍运行在需要暴露端口的本机。
@@ -16,7 +18,7 @@
 
 ## 创建版本
 
-先修改根目录 Cargo.toml 的 `[workspace.package].version`，运行 `cargo check --workspace` 更新 Cargo.lock 中两个包的版本，提交并推送到 main。tag 必须与 workspace 版本一致，目前只接受稳定版本 `vX.Y.Z`。
+先修改根目录 Cargo.toml 的 `[workspace.package].version`，运行 `cargo check --workspace` 更新 Cargo.lock 中 workspace 包的版本，并同步 android/app/build.gradle.kts 的 versionName 与递增的 versionCode，提交并推送到 main。tag 必须与 workspace 版本一致，目前只接受稳定版本 `vX.Y.Z`。
 
 方式一：在 GitHub Actions 中选择 **Create version tag**，选择 `main` 分支，输入 `0.1.0` 这样的版本号。该流程创建 tag 并显式触发 Release；不会覆盖同名 tag。若创建 tag 后发布调度失败，可以手动选择该 tag 运行 Release。
 

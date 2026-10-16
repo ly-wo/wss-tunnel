@@ -12,3 +12,8 @@ dist
 **/*.sqlite3
 **/*.sqlite3-wal
 **/*.sqlite3-shm
+
+# Android tooling and local implementation notes are not server build inputs.
+/android
+/docs
+/.ai-handoff

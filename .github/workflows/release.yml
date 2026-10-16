@@ -21,6 +21,9 @@ jobs:
   binaries:
     needs: verify
     uses: ./.github/workflows/binaries.yml
+  android:
+    needs: verify
+    uses: ./.github/workflows/android.yml
   container:
     needs: [verify, binaries]
     permissions:
@@ -28,7 +31,7 @@ jobs:
       packages: write
     uses: ./.github/workflows/container.yml
   release:
-    needs: [binaries, container]
+    needs: [binaries, container, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -39,12 +42,21 @@ jobs:
           pattern: binaries-*
           path: dist
           merge-multiple: true
+      - name: Download Android APK
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wss-tunnel-android-debug
+          path: dist
+      - name: Verify Android checksum
+        working-directory: dist
+        run: sha256sum --check wss-tunnel-android-arm64-debug.apk.sha256
       - name: Verify checksums and publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           python3 scripts/check_assets.py
+          cat dist/wss-tunnel-android-arm64-debug.apk.sha256 >> dist/SHA256SUMS
           if gh release view "$TAG" --json isDraft > release-state.json 2>/dev/null; then
             python3 -c 'import json; assert json.load(open("release-state.json"))["isDraft"], "Refusing to overwrite a published release"'
           else
