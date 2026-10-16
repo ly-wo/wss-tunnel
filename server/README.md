@@ -20,7 +20,7 @@ docker compose -f compose.yaml -f compose.http.yaml up -d --pull always
 
 HTTP entryPoint 默认 `web`，可通过 `TRAEFIK_HTTP_ENTRYPOINT` 更改；现有 Traefik 的全局 HTTPS 跳转需针对这些域名取消或豁免。WS 链路不加密。`TUNNEL_PUBLIC_SCHEME=http` 只修改客户端展示的 URL，入口仍由 Traefik 配置决定。
 
-默认使用 `ghcr.io/ly-wo/wss-tunnel:0.1.0`，可通过 `.env` 中的 `TUNNEL_IMAGE` 指定其他版本。客户端应使用对应版本的 Release 产物。升级时修改镜像版本，再执行 `docker compose pull && docker compose up -d`。
+默认使用 `ghcr.io/ly-wo/wss-tunnel:0.2.0`，可通过 `.env` 中的 `TUNNEL_IMAGE` 指定其他版本。客户端应使用对应版本的 Release 产物。升级时修改镜像版本，再执行 `docker compose pull && docker compose up -d`。
 
 从源码构建时保留完整项目，构建上下文是上一级目录：
 

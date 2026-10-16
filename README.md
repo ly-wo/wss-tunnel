@@ -11,7 +11,7 @@ Cargo.lock    锁定依赖
 
 本机客户端通过 WS 或 WSS 连接服务器，获取一个公网子域名；默认使用 WSS 和 HTTPS。Traefik 负责 TLS 与域名路由，服务容器加入现有桥接网络，不新增宿主机端口。
 
-> 账号管理、账号子域名保留和审计属于当前源码的新功能，已发布的 `0.1.0` 镜像不包含这些能力。体验新功能请使用下文的源码构建命令，并重新构建客户端。
+> 账号管理、管理后台、可配置名额和详细审计从 `0.2.0` 提供；旧 `0.1.0` 镜像不包含这些能力。二进制及镜像是否已生成以对应 Release 流程结果为准；发布完成前可使用下文的源码构建命令。
 
 ## 服务端部署
 
@@ -27,7 +27,7 @@ docker compose pull
 docker compose up -d
 ```
 
-默认镜像为 `ghcr.io/ly-wo/wss-tunnel:0.1.0`，可通过 `.env` 的 `TUNNEL_IMAGE` 更改。源码构建需保留完整项目，在 `server` 目录执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
+默认镜像为 `ghcr.io/ly-wo/wss-tunnel:0.2.0`，可通过 `.env` 的 `TUNNEL_IMAGE` 更改。源码构建需保留完整项目，在 `server` 目录执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
 
 `.env` 示例：
 
@@ -222,7 +222,7 @@ make protocols-test PYTHON=.venv/bin/python
 TUNNEL_TEST_IMAGE=wss-tunnel:local make protocols-test PYTHON=.venv/bin/python
 ```
 
-Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-image`、`make logs`、`make package`；`make client PORT=3000 NAME=demo` 或 `make client LOCAL_TARGET=https://localhost:8443` 可启动客户端。发布入口为 `make tag VERSION=0.1.0` 与 `make publish TAG=v0.1.0`，会实际触发对应 GitHub Action。
+Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-image`、`make logs`、`make package`；`make client PORT=3000 NAME=demo` 或 `make client LOCAL_TARGET=https://localhost:8443` 可启动客户端。发布入口为 `make tag VERSION=0.2.0` 与 `make publish TAG=v0.2.0`，会实际触发对应 GitHub Action。
 
 两端是同一 workspace 的子包，通过根目录 `protocol.rs` 共享协议；开发或 Docker 构建需保留完整项目，运行时客户端和服务端二进制可独立分发。集成测试使用临时目录和独立 Traefik 容器，不修改生产服务或本机信任库。验证状态见 `VALIDATION.md`。
 
