@@ -1,5 +1,11 @@
 name: Build binaries
 on:
+  workflow_dispatch:
+    inputs:
+      all-platforms:
+        description: Build all five platform packages
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       all-platforms:
@@ -50,7 +56,12 @@ jobs:
       - name: Package binaries
         env:
           TARGET: ${{ matrix.target }}
-        run: python3 scripts/package.py --target "$TARGET"
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            python scripts/package.py --target "$TARGET"
+          else
+            python3 scripts/package.py --target "$TARGET"
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binaries-${{ matrix.target }}

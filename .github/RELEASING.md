@@ -12,6 +12,8 @@
 
 镜像为服务端镜像 `ghcr.io/ly-wo/wss-tunnel`，支持 `linux/amd64`、`linux/arm64`，附带 SBOM 和构建 provenance。客户端仍运行在需要暴露端口的本机。
 
+需要单独构建所有平台而不发布版本时，在 Actions 手动运行 **Build binaries**，保持 `all-platforms=true`。这只上传构建产物，不创建 tag 或 Release。
+
 ## 创建版本
 
 先修改根目录 Cargo.toml 的 `[workspace.package].version`，运行 `cargo check --workspace` 更新 Cargo.lock 中两个包的版本，提交并推送到 main。tag 必须与 workspace 版本一致，目前只接受稳定版本 `vX.Y.Z`。
