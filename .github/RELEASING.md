@@ -41,11 +41,13 @@ Release 会先完成全部平台构建和镜像发布，再创建草稿、上传
 # .env 设置 TUNNEL_IMAGE=ghcr.io/ly-wo/wss-tunnel:0.1.0
 # 当前仓库为私有，拉取前需要具有 read:packages 权限的账号登录 GHCR
 docker login ghcr.io
-docker compose -f compose.yaml -f compose.image.yaml pull
-docker compose -f compose.yaml -f compose.image.yaml up -d --no-build
+docker compose pull
+docker compose up -d
 ```
 
-首个版本未发布前可使用 `dev`；`latest` 仅由正式版本发布生成。源代码构建仍可使用原先的 `docker compose up -d --build`。
+默认 Compose 固定使用已发布的 `0.1.0`，升级时修改 `.env` 中的 `TUNNEL_IMAGE`，再执行上述命令；客户端也使用对应版本。`dev` 跟随 main，`latest` 由正式版本发布更新。原 `compose.image.yaml` 仍兼容，但无需再额外指定。
+
+从源码构建时保留完整项目，执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`；使用独立本地镜像 `wss-tunnel:local`，不覆盖发布镜像标签。
 
 ## 权限与维护
 

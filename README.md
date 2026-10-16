@@ -13,15 +13,19 @@ Cargo.lock    锁定依赖
 
 ## 服务端部署
 
-需要 Docker Compose、Traefik v3（启用 Docker provider）和现有 Docker 网络。复制完整项目到服务器，Compose 的构建上下文是项目根目录。
+需要 Docker Compose、Traefik v3（启用 Docker provider）和现有 Docker 网络。默认拉取已发布的服务端镜像，无需在服务器编译 Rust。使用与服务端相同版本的客户端。
 
 ```bash
 cd server
 ./init.sh
 # 编辑 .env，然后配置基础域名和泛域名 DNS
 docker compose config --quiet
-docker compose up -d --build
+# 私有镜像需先 docker login ghcr.io（账号需有 read:packages 权限）
+docker compose pull
+docker compose up -d
 ```
+
+默认镜像为 `ghcr.io/ly-wo/wss-tunnel:0.1.0`，可通过 `.env` 的 `TUNNEL_IMAGE` 更改。源码构建需保留完整项目，在 `server` 目录执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
 
 `.env` 示例：
 

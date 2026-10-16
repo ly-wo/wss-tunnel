@@ -20,6 +20,8 @@ jobs:
       - name: Check Compose and scripts
         run: |
           docker compose --env-file server/.env.example -f server/compose.yaml config --quiet
+          docker compose --env-file server/.env.example -f server/compose.yaml -f server/compose.image.yaml config --quiet
+          docker compose --env-file server/.env.example -f server/compose.yaml -f server/compose.build.yaml config --quiet
           bash -n server/init.sh client/run.sh
       - name: Build container
         run: docker build -f server/Dockerfile -t wss-tunnel:test .

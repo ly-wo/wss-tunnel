@@ -1,0 +1,8 @@
+# Source build: docker compose -f compose.yaml -f compose.build.yaml up -d --build
+services:
+  tunnel:
+    image: ${TUNNEL_BUILD_IMAGE:-wss-tunnel:local}
+    pull_policy: build
+    build:
+      context: ..
+      dockerfile: server/Dockerfile

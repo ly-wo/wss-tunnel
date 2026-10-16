@@ -1,4 +1,4 @@
-# Overlay: docker compose -f compose.yaml -f compose.image.yaml up -d --no-build
+# Compatibility overlay; compose.yaml now uses the published image by default.
 services:
   tunnel:
-    image: ${TUNNEL_IMAGE:-ghcr.io/ly-wo/wss-tunnel:latest}
+    image: ${TUNNEL_IMAGE:-ghcr.io/ly-wo/wss-tunnel:0.1.0}

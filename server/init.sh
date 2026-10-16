@@ -11,4 +11,4 @@ if [ ! -f secrets/token ]; then
   chmod 444 secrets/token
 fi
 if [ ! -f .env ]; then cp .env.example .env; fi
-echo '初始化完成。编辑 .env，配置 DNS 后执行 docker compose up -d --build。'
+echo '初始化完成。编辑 .env，配置 DNS 后执行 docker compose pull && docker compose up -d。'

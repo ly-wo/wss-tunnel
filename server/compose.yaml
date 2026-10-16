@@ -1,8 +1,6 @@
 services:
   tunnel:
-    build:
-      context: ..
-      dockerfile: server/Dockerfile
+    image: ${TUNNEL_IMAGE:-ghcr.io/ly-wo/wss-tunnel:0.1.0}
     restart: unless-stopped
     init: true
     read_only: true
