@@ -1,0 +1,42 @@
+services:
+  tunnel:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      TUNNEL_DOMAIN: ${TUNNEL_DOMAIN:?Set TUNNEL_DOMAIN}
+      CONNECT_DOMAIN: ${CONNECT_DOMAIN:?Set CONNECT_DOMAIN}
+      TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
+      TUNNEL_BIND: 0.0.0.0:8080
+    secrets: [tunnel_token]
+    networks: [traefik]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:?Set network}
+      traefik.http.routers.rust-tunnel-connect.rule: Host(`${CONNECT_DOMAIN}`)
+      traefik.http.routers.rust-tunnel-connect.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.rust-tunnel-connect.tls: "true"
+      traefik.http.routers.rust-tunnel-connect.tls.certresolver: ${TRAEFIK_CERTRESOLVER:?Set DNS resolver}
+      traefik.http.routers.rust-tunnel-connect.priority: "100"
+      traefik.http.routers.rust-tunnel-connect.service: rust-tunnel
+      traefik.http.routers.rust-tunnel-public.rule: HostRegexp(`^[a-z0-9-]+\.\Q${TUNNEL_DOMAIN}\E$$`)
+      traefik.http.routers.rust-tunnel-public.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.rust-tunnel-public.tls: "true"
+      traefik.http.routers.rust-tunnel-public.tls.certresolver: ${TRAEFIK_CERTRESOLVER}
+      traefik.http.routers.rust-tunnel-public.tls.domains[0].main: ${TUNNEL_DOMAIN}
+      traefik.http.routers.rust-tunnel-public.tls.domains[0].sans: '*.${TUNNEL_DOMAIN}'
+      traefik.http.routers.rust-tunnel-public.priority: "10"
+      traefik.http.routers.rust-tunnel-public.service: rust-tunnel
+      traefik.http.services.rust-tunnel.loadbalancer.server.port: "8080"
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK}
+secrets:
+  tunnel_token:
+    file: ./secrets/token
