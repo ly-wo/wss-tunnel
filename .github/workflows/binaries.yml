@@ -1,0 +1,59 @@
+name: Build binaries
+on:
+  workflow_call:
+    inputs:
+      all-platforms:
+        type: boolean
+        default: true
+permissions:
+  contents: read
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      targets: ${{ steps.targets.outputs.value }}
+    steps:
+      - id: targets
+        env:
+          ALL: ${{ inputs.all-platforms }}
+        run: |
+          if [ "$ALL" = true ]; then
+            echo 'value={"include":[{"os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu"},{"os":"ubuntu-22.04","target":"aarch64-unknown-linux-gnu"},{"os":"macos-14","target":"aarch64-apple-darwin"},{"os":"macos-14","target":"x86_64-apple-darwin"},{"os":"windows-2022","target":"x86_64-pc-windows-msvc"}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'value={"include":[{"os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu"}]}' >> "$GITHUB_OUTPUT"
+          fi
+  build:
+    needs: matrix
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.targets) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup target add "$TARGET"
+      - name: Install Linux ARM64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build client and server
+        env:
+          TARGET: ${{ matrix.target }}
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        run: cargo build --release --workspace --locked --target "$TARGET"
+      - name: Package binaries
+        env:
+          TARGET: ${{ matrix.target }}
+        run: python3 scripts/package.py --target "$TARGET"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

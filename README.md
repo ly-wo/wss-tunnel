@@ -97,3 +97,13 @@ python3 tests/e2e.py
 ```
 
 两端是同一 workspace 的子包，通过根目录 `protocol.rs` 共享协议；开发或 Docker 构建需保留完整项目，运行时客户端和服务端二进制可独立分发。集成测试使用临时目录和独立 Traefik 容器，不修改生产服务或本机信任库。验证状态见 `VALIDATION.md`。
+
+## Actions、产物和版本发布
+
+已配置 CI、跨平台二进制、GHCR 多架构服务端镜像及 tag 发布。使用说明见 [构建与发布](.github/RELEASING.md)。
+
+- [Actions](https://github.com/ly-wo/wss-tunnel/actions)：PR/main 检查、Linux x64 构建产物。
+- [Releases](https://github.com/ly-wo/wss-tunnel/releases)：`vX.Y.Z` 发布 Linux/macOS/Windows 二进制和 SHA256 校验文件。
+- 镜像：`ghcr.io/ly-wo/wss-tunnel:dev` 为 main 开发版；正式 tag 发布后提供固定版本与 `latest`。
+
+下载二进制后可直接执行 `tunnel-client 3000 --server wss://connect.example.com --token-file ./token --name demo`，无需安装 Rust。省略 `--name` 自动分配随机子域名。

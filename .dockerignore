@@ -4,3 +4,6 @@ target
 **/secrets
 **/*.log
 tests
+.github
+scripts
+dist

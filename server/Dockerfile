@@ -1,6 +1,6 @@
-FROM rust:1.98-bookworm AS builder
+FROM rust:1.98.1-bookworm AS builder
 WORKDIR /app
-COPY Cargo.toml Cargo.lock protocol.rs ./
+COPY Cargo.toml Cargo.lock protocol.rs rust-toolchain.toml ./
 COPY client ./client
 COPY server ./server
 RUN cargo build --release --locked -p tunnel-server

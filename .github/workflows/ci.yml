@@ -1,0 +1,26 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
+  artifacts:
+    needs: verify
+    uses: ./.github/workflows/binaries.yml
+    with:
+      all-platforms: false
+  container:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: verify
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/container.yml
