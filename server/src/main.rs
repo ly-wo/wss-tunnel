@@ -304,7 +304,7 @@ async fn route(app: Arc<App>, req: Request) -> Response {
             .map(|v| v.as_str())
             .unwrap_or("/")
             .to_string(),
-        headers: protocol::headers(&parts.headers),
+        headers: request_meta::current().forwarded_headers(&parts.headers),
         body: STANDARD.encode(data),
     };
     let (tx, rx) = oneshot::channel();

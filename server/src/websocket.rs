@@ -63,7 +63,7 @@ pub async fn upgrade(
             .map(|p| p.as_str())
             .unwrap_or("/")
             .to_owned(),
-        headers: protocol::headers(&parts.headers),
+        headers: request_meta::current().forwarded_headers(&parts.headers),
         protocols: offered.clone(),
     };
     if tunnel.tx.try_send(packet).is_err() {

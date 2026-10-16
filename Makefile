@@ -15,7 +15,7 @@ TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p')
 COMPOSE = $(DOCKER) compose --project-directory "$(ROOT)/server" --env-file "$(ROOT)/server/.env" -f "$(ROOT)/server/compose.yaml"
 COMPOSE_IMAGE = $(COMPOSE) -f "$(ROOT)/server/compose.image.yaml"
 
-.PHONY: help init build release fmt fmt-check lint test check e2e protocols-test admin-test client server \
+.PHONY: help init build release fmt fmt-check lint test check e2e protocols-test admin-test real-ip-test client server \
 	docker-build docker-test compose-check up down logs ps pull up-image package tag publish clean
 
 help: ## 显示常用命令
@@ -52,6 +52,9 @@ e2e: build ## 本机服务端经 Traefik 的 WSS 集成测试（需要 Docker）
 
 admin-test: build ## 管理权限、动态名额和详细审计集成测试
 	cd "$(ROOT)" && $(PYTHON) -u tests/admin.py
+
+real-ip-test: build ## Traefik 真实 IP 解析及 HTTP/WebSocket 转发（需要 Docker 和 websockets）
+	cd "$(ROOT)" && $(PYTHON) -u tests/real_ip.py
 
 protocols-test: build ## 协议矩阵测试（PYTHON 指向安装了 tests/requirements-protocols.txt 的环境）
 	cd "$(ROOT)" && $(PYTHON) -u tests/protocols.py

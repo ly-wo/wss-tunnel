@@ -53,6 +53,32 @@ fn clean(value: &str, limit: usize) -> String {
         .collect()
 }
 impl RequestMeta {
+    /// Give local applications the same verified address used by the audit log.
+    /// Filter hop-by-hop headers first so Connection cannot suppress these fields.
+    pub fn forwarded_headers(&self, headers: &http::HeaderMap) -> Vec<(String, String)> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let mut headers = crate::protocol::headers(headers);
+        headers.retain(|(name, _)| {
+            !matches!(name.as_str(), "x-forwarded-for" | "x-real-ip" | "forwarded")
+        });
+        let ip: IpAddr = self
+            .client_ip
+            .parse()
+            .expect("RequestMeta contains a valid IP");
+        let forwarded = match ip {
+            IpAddr::V4(ip) => format!("for={ip}"),
+            IpAddr::V6(ip) => format!("for=\"[{ip}]\""),
+        };
+        for (name, value) in [
+            ("x-forwarded-for", self.client_ip.as_str()),
+            ("x-real-ip", self.client_ip.as_str()),
+            ("forwarded", forwarded.as_str()),
+        ] {
+            headers.push((name.into(), STANDARD.encode(value)));
+        }
+        headers
+    }
+
     pub fn new(req: &Request, peer: SocketAddr, trusted: &[IpNet]) -> Self {
         let peer_ip = peer.ip().to_canonical();
         let mut client_ip = peer_ip;
@@ -119,6 +145,45 @@ impl RequestMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn downstream_ip_headers_match_audit_and_replace_spoofed_values() {
+        for (peer, trusted, expected, forwarded) in [
+            ("127.0.0.1:1234", true, "198.51.100.2", "for=198.51.100.2"),
+            ("127.0.0.1:1234", false, "127.0.0.1", "for=127.0.0.1"),
+            (
+                "[2001:db8::1]:1234",
+                false,
+                "2001:db8::1",
+                "for=\"[2001:db8::1]\"",
+            ),
+        ] {
+            let req = Request::builder()
+                .header("x-forwarded-for", "192.0.2.9")
+                .header("x-forwarded-for", "198.51.100.2")
+                .header("x-real-ip", "192.0.2.9")
+                .header("forwarded", "for=192.0.2.9")
+                .header("connection", "x-forwarded-for, x-real-ip, forwarded")
+                .header("x-custom", "preserved")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let nets = if trusted {
+                vec!["127.0.0.1/32".parse().unwrap()]
+            } else {
+                vec![]
+            };
+            let meta = RequestMeta::new(&req, peer.parse().unwrap(), &nets);
+            let headers = crate::protocol::restore(meta.forwarded_headers(req.headers())).unwrap();
+            assert_eq!(meta.client_ip, expected);
+            for name in ["x-forwarded-for", "x-real-ip"] {
+                assert_eq!(headers[name], expected);
+                assert_eq!(headers.get_all(name).iter().count(), 1);
+            }
+            assert_eq!(headers["forwarded"], forwarded);
+            assert_eq!(headers["x-custom"], "preserved");
+            assert!(!headers.contains_key("connection"));
+        }
+    }
+
     #[test]
     fn proxy_chain_requires_trust_and_rejects_malformed_headers() {
         let peer = "127.0.0.1:1234".parse().unwrap();

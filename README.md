@@ -27,7 +27,7 @@ docker compose pull
 docker compose up -d
 ```
 
-默认镜像为 `ghcr.io/ly-wo/wss-tunnel:0.2.0`，可通过 `.env` 的 `TUNNEL_IMAGE` 更改。源码构建需保留完整项目，在 `server` 目录执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
+默认镜像为 `ghcr.io/ly-wo/wss-tunnel:0.2.1`，可通过 `.env` 的 `TUNNEL_IMAGE` 更改。源码构建需保留完整项目，在 `server` 目录执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
 
 `.env` 示例：
 
@@ -122,9 +122,26 @@ TUNNEL_TRUSTED_PROXIES=172.20.0.2/32
 
 仅当直接连接来源可信时解析 `X-Forwarded-For`，从右向左找到首个不可信跳点；格式非法或链路过长则回退到直连 IP。管理后台同时显示实际使用的来源 IP 和直连 IP，便于核对。IP 不代表已验证的用户身份，不自动推断地理位置、设备型号或真实姓名。
 
+配置步骤（在公网服务器执行）：
+
+```bash
+# 找到 Traefik 在与 tunnel 共享的网络中的 IP
+docker inspect <Traefik容器名> --format '{{range $name, $net := .NetworkSettings.Networks}}{{$name}}: {{$net.IPAddress}}{{println}}{{end}}'
+# 将这个 IP 写入 server/.env 的 TUNNEL_TRUSTED_PROXIES，例如 172.20.0.2/32
+cd server
+docker compose up -d --force-recreate tunnel
+```
+
+修改环境变量后需要重新创建容器，单纯 restart 不会加载新的 Compose 环境变量。重新登录或连接后，检查新审计的来源是否为 `trusted_proxy`、直连 IP 是否为 Traefik；旧记录不会回填。Traefik 前面若还有 CDN/LB，需要在 Traefik 的 `forwardedHeaders.trustedIPs` 中信任实际上游，并在隧道服务中配置链路上的可信代理地址，不能开启无条件信任所有来源。
+
+**本地服务的访问者 IP**：服务端对普通 HTTP 和 WebSocket 握手统一生成 `X-Forwarded-For`、`X-Real-IP` 和 `Forwarded`，使用与审计相同规则解析出的 IP，覆盖请求中原有的这三个头。`X-Forwarded-For` 为单个已解析地址，不保留原始代理链。未配置可信代理时，它们仍是直连 IP，不能凭转发头恢复来源。其他供应商专用 IP 头不属于本项目验证结果，本地应用应使用上述标准头。
+
+本地应用的 TCP 对端仍是隧道客户端（常见为 `127.0.0.1` 或容器 IP）。需要在应用框架或本地反向代理中，仅信任隧道客户端的实际连接地址并启用转发头解析，才能让框架的请求 IP 显示访问者地址；仅查看 socket/`REMOTE_ADDR` 不会自动改变。不要让本地服务同时接受不可信来源伪造这些头。用户登录审计记录的是登录者 IP，业务请求转发的是该次访问者 IP，两者不一定属于同一人。
+
 审计不保存认证头、密码、完整 Token、查询参数、请求正文或转发业务内容。它是存于本地 SQLite 的操作记录，不是防篡改日志或逐条业务流量日志。数据库访问者可修改记录；长期外部归档需另行接入。
 
 验证：`make admin-test` 覆盖管理员隔离、旧库迁移、动态名额、停用撤销、可信代理与伪造 IP、审计筛选及持久化。
+`make real-ip-test PYTHON=<已安装 tests/requirements-protocols.txt 的 Python>` 使用隔离的 Traefik 容器和启用证书校验的 HTTPS/WSS，检查可信/不可信代理下，用户和审计 IP、HTTP 转发头、WebSocket 握手头一致，并检查伪造 IP 头被覆盖。Docker Desktop 下测到的入口 IP 可能来自虚拟机/NAT，此测试不能代替公网来源 IP 验证。
 
 ## 客户端
 
@@ -222,7 +239,7 @@ make protocols-test PYTHON=.venv/bin/python
 TUNNEL_TEST_IMAGE=wss-tunnel:local make protocols-test PYTHON=.venv/bin/python
 ```
 
-Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-image`、`make logs`、`make package`；`make client PORT=3000 NAME=demo` 或 `make client LOCAL_TARGET=https://localhost:8443` 可启动客户端。发布入口为 `make tag VERSION=0.2.0` 与 `make publish TAG=v0.2.0`，会实际触发对应 GitHub Action。
+Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-image`、`make logs`、`make package`；`make client PORT=3000 NAME=demo` 或 `make client LOCAL_TARGET=https://localhost:8443` 可启动客户端。发布入口为 `make tag VERSION=0.2.1` 与 `make publish TAG=v0.2.1`，会实际触发对应 GitHub Action。
 
 两端是同一 workspace 的子包，通过根目录 `protocol.rs` 共享协议；开发或 Docker 构建需保留完整项目，运行时客户端和服务端二进制可独立分发。集成测试使用临时目录和独立 Traefik 容器，不修改生产服务或本机信任库。验证状态见 `VALIDATION.md`。
 
@@ -238,7 +255,7 @@ Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-i
 
 ## Android 客户端
 
-`android/` 为独立 Gradle 工程（`com.wlzxj.tunnel`，versionName `0.2.0`）。隧道转发复用 `tunnel-client` 库与 `client/jni` 中的 `libtunnel_client_jni.so`，界面为 Jetpack Compose，账号 API 与桌面网页一致。
+`android/` 为独立 Gradle 工程（`com.wlzxj.tunnel`，versionName `0.2.1`）。隧道转发复用 `tunnel-client` 库与 `client/jni` 中的 `libtunnel_client_jni.so`，界面为 Jetpack Compose，账号 API 与桌面网页一致。
 
 ### 构建环境（通用）
 

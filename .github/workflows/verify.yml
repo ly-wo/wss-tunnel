@@ -21,6 +21,11 @@ jobs:
         run: python3 -u tests/accounts.py
       - name: Test administrator settings, quota and detailed audit
         run: python3 -u tests/admin.py
+      - name: Test real IP through Traefik HTTPS and WSS
+        run: |
+          python3 -m venv /tmp/tunnel-real-ip-venv
+          /tmp/tunnel-real-ip-venv/bin/pip install -r tests/requirements-protocols.txt
+          /tmp/tunnel-real-ip-venv/bin/python -u tests/real_ip.py
       - name: Check Compose and scripts
         run: |
           docker compose --env-file server/.env.example -f server/compose.yaml config --quiet
