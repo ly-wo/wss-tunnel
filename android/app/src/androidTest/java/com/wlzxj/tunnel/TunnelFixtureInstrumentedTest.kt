@@ -118,6 +118,17 @@ class TunnelFixtureInstrumentedTest {
     }
 
     @Test
+    fun loginSessionValidForAccountConnectWithoutTokenRotation() = runBlocking {
+        val api = TunnelApi()
+        val user = "acc${UUID.randomUUID().toString().replace("-", "").take(8)}"
+        val pass = "TestPass-${UUID.randomUUID()}"
+        api.register(origin, debugLocal, user, pass)
+        val (session, _) = api.login(origin, debugLocal, user, pass)
+        val profile = api.me(origin, debugLocal, session)
+        assertEquals(user, profile.username)
+    }
+
+    @Test
     fun passwordAuthNamedSubdomainOnlineThenOffline() = runBlocking {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val api = TunnelApi()

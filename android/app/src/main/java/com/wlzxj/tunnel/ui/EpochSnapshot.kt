@@ -1,9 +1,12 @@
 package com.wlzxj.tunnel.ui
 
-internal data class EpochSnapshot(
+data class EpochSnapshot(
     val server: Int,
     val account: Int,
+    val guardGeneration: Long,
 )
 
-internal fun isEpochStale(snapshot: EpochSnapshot, serverEpoch: Int, accountEpoch: Int): Boolean =
-    snapshot.server != serverEpoch || snapshot.account != accountEpoch
+fun isEpochStale(snapshot: EpochSnapshot, serverEpoch: Int, accountEpoch: Int): Boolean =
+    snapshot.server != serverEpoch ||
+        snapshot.account != accountEpoch ||
+        !TunnelStartGuard.matches(snapshot)

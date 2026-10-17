@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -54,7 +55,10 @@ fun AccountScreen(viewModel: AppViewModel, modifier: Modifier = Modifier) {
 
     LaunchedEffect(Unit) { viewModel.refreshConfig() }
     LaunchedEffect(session.session) {
-        if (session.session != null) viewModel.loadAccount()
+        if (session.session != null) {
+            password = ""
+            viewModel.loadAccount()
+        }
     }
 
     Column(
@@ -74,14 +78,14 @@ fun AccountScreen(viewModel: AppViewModel, modifier: Modifier = Modifier) {
                         value = username,
                         onValueChange = { username = it },
                         label = { Text("用户名") },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().testTag("account_username"),
                     )
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
                         label = { Text("密码") },
                         visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().testTag("account_password"),
                     )
                     Button(
                         onClick = { viewModel.login(username, password) },

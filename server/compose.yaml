@@ -1,6 +1,6 @@
 services:
   tunnel:
-    image: ${TUNNEL_IMAGE:-ghcr.io/ly-wo/wss-tunnel:0.2.2}
+    image: ${TUNNEL_IMAGE:-ghcr.io/ly-wo/wss-tunnel:0.2.3}
     restart: unless-stopped
     init: true
     read_only: true

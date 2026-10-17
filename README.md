@@ -27,7 +27,7 @@ docker compose pull
 docker compose up -d
 ```
 
-默认镜像为 `ghcr.io/ly-wo/wss-tunnel:0.2.2`，可通过 `.env` 的 `TUNNEL_IMAGE` 更改。源码构建需保留完整项目，在 `server` 目录执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
+默认镜像为 `ghcr.io/ly-wo/wss-tunnel:0.2.3`，可通过 `.env` 的 `TUNNEL_IMAGE` 更改。源码构建需保留完整项目，在 `server` 目录执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
 
 `.env` 示例：
 
@@ -239,7 +239,7 @@ make protocols-test PYTHON=.venv/bin/python
 TUNNEL_TEST_IMAGE=wss-tunnel:local make protocols-test PYTHON=.venv/bin/python
 ```
 
-Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-image`、`make logs`、`make package`；`make client PORT=3000 NAME=demo` 或 `make client LOCAL_TARGET=https://localhost:8443` 可启动客户端。发布入口为 `make tag VERSION=0.2.2` 与 `make publish TAG=v0.2.2`，会实际触发对应 GitHub Action。
+Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-image`、`make logs`、`make package`；`make client PORT=3000 NAME=demo` 或 `make client LOCAL_TARGET=https://localhost:8443` 可启动客户端。发布入口为 `make tag VERSION=0.2.3` 与 `make publish TAG=v0.2.3`，会实际触发对应 GitHub Action。
 
 两端是同一 workspace 的子包，通过根目录 `protocol.rs` 共享协议；开发或 Docker 构建需保留完整项目，运行时客户端和服务端二进制可独立分发。集成测试使用临时目录和独立 Traefik 容器，不修改生产服务或本机信任库。验证状态见 `VALIDATION.md`。
 
@@ -255,7 +255,7 @@ Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-i
 
 ## Android 客户端
 
-`android/` 为独立 Gradle 工程（`com.wlzxj.tunnel`，versionName `0.2.2`）。隧道转发复用 `tunnel-client` 库与 `client/jni` 中的 `libtunnel_client_jni.so`，界面为 Jetpack Compose，账号 API 与桌面网页一致。
+`android/` 为独立 Gradle 工程（`com.wlzxj.tunnel`，versionName `0.2.3`）。隧道转发复用 `tunnel-client` 库与 `client/jni` 中的 `libtunnel_client_jni.so`，界面为 Jetpack Compose，账号 API 与桌面网页一致。
 
 ### 构建环境（通用）
 
@@ -298,6 +298,7 @@ cd android
 - Debug 包：`applicationId` 为 `com.wlzxj.tunnel.debug`，可直接 `adb install -r app/build/outputs/apk/debug/app-debug.apk`。
 - **Release 构建**默认要求 **HTTPS** 接入地址；校验服务器证书和域名。
 - **Debug 构建**可在连接页勾选「允许本地 HTTP 接入（127.0.0.1 / 10.0.2.2）」：仅对回环/模拟器地址允许明文 HTTP/WS，用于本机或模拟器联调；HTTPS/WSS 仍校验证书，Release 不提供此开关。
+- **账号与连接**：在账号页登录后，连接页默认「使用当前账号」，展示同一用户名与服务器；开始连接会先校验目标地址，再调用账号 `me` 校验会话，然后用本次登录密码走隧道 Basic 认证（密码仅保留在进程内存，不落盘）。仍可显式选择「连接 Token」或「手动账号密码」；账号页创建 Token 后「填入连接页」会切换到手动 Token 模式（不会被登录默认项覆盖）。**退出登录**、会话到期（`expires_at` 定时任务 + 回到前台时复查）或会话失效会清理内存绑定，并通过前台服务按归属 **仅停止当前账号关联的隧道**；**手动 Token / 手动密码**建立的隧道不会因退出账号而断开，仍可在通知栏停止。
 
 ### 仪器测试（fixture）
 

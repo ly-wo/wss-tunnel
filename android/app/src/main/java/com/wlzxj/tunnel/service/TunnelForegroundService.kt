@@ -14,6 +14,7 @@ import com.wlzxj.tunnel.MainActivity
 import com.wlzxj.tunnel.R
 import com.wlzxj.tunnel.jni.TunnelEventCallback
 import com.wlzxj.tunnel.jni.TunnelNative
+import com.wlzxj.tunnel.ui.TunnelStartGuard
 import org.json.JSONObject
 
 enum class TunnelUiPhase {
@@ -31,6 +32,8 @@ data class TunnelRuntimeState(
     val targetDisplay: String? = null,
     val message: String? = null,
     val startedAtMillis: Long? = null,
+    val ownership: TunnelServiceOwnership? = null,
+    val connectionId: Long = 0L,
 )
 
 object TunnelServiceState {
@@ -46,6 +49,7 @@ class TunnelForegroundService : Service(), TunnelEventCallback {
     companion object {
         const val ACTION_START = "com.wlzxj.tunnel.START"
         const val ACTION_STOP = "com.wlzxj.tunnel.STOP"
+        const val ACTION_STOP_ACCOUNT = "com.wlzxj.tunnel.STOP_ACCOUNT"
         const val EXTRA_SERVER = "server"
         const val EXTRA_TARGET = "target"
         const val EXTRA_TARGET_LABEL = "target_label"
@@ -65,6 +69,7 @@ class TunnelForegroundService : Service(), TunnelEventCallback {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var activeGeneration: Long = 0L
+    private var activeOwnership: TunnelServiceOwnership? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -76,6 +81,7 @@ class TunnelForegroundService : Service(), TunnelEventCallback {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopActive()
+            ACTION_STOP_ACCOUNT -> stopAccountIfMatches(intent)
             ACTION_START -> startFromIntent(intent)
         }
         return START_NOT_STICKY
@@ -98,6 +104,21 @@ class TunnelForegroundService : Service(), TunnelEventCallback {
     }
 
     private fun startFromIntent(intent: Intent) {
+        val serverEpoch = intent.getIntExtra(TunnelServiceOwnership.EXTRA_START_SERVER_EPOCH, -1)
+        val accountEpoch = intent.getIntExtra(TunnelServiceOwnership.EXTRA_START_ACCOUNT_EPOCH, -1)
+        val guardGeneration = intent.getLongExtra(TunnelServiceOwnership.EXTRA_START_GUARD_GENERATION, -1L)
+        if (serverEpoch >= 0 && accountEpoch >= 0 && guardGeneration >= 0L) {
+            val snapshot = com.wlzxj.tunnel.ui.EpochSnapshot(serverEpoch, accountEpoch, guardGeneration)
+            if (!TunnelStartGuard.matches(snapshot)) {
+                abandonStaleStartIntent()
+                return
+            }
+        }
+        val ownership = TunnelServiceOwnership.readFromIntent(intent) ?: TunnelServiceOwnership.Manual
+        val connectionId = when (ownership) {
+            is TunnelServiceOwnership.Account -> ownership.connectionId
+            is TunnelServiceOwnership.Manual -> 0L
+        }
         val server = intent.getStringExtra(EXTRA_SERVER) ?: return
         val target = intent.getStringExtra(EXTRA_TARGET) ?: return
         val targetLabel = intent.getStringExtra(EXTRA_TARGET_LABEL) ?: target
@@ -108,11 +129,14 @@ class TunnelForegroundService : Service(), TunnelEventCallback {
         val allowInsecure = intent.getBooleanExtra(EXTRA_ALLOW_INSECURE, false)
 
         activeGeneration = 0L
+        activeOwnership = ownership
         TunnelServiceState.update(
             TunnelRuntimeState(
                 phase = TunnelUiPhase.Connecting,
                 targetDisplay = targetLabel,
                 startedAtMillis = System.currentTimeMillis(),
+                ownership = ownership,
+                connectionId = connectionId,
             ),
         )
         startForeground(NOTIFICATION_ID, buildNotification("连接中…", targetLabel, null))
@@ -188,6 +212,7 @@ class TunnelForegroundService : Service(), TunnelEventCallback {
 
         if (rawPhase == "stopped" || rawPhase == "failed") {
             activeGeneration = 0L
+            activeOwnership = null
             TunnelServiceState.update(
                 TunnelRuntimeState(
                     phase = if (rawPhase == "failed") TunnelUiPhase.Failed else TunnelUiPhase.Idle,
@@ -195,6 +220,8 @@ class TunnelForegroundService : Service(), TunnelEventCallback {
                     message = if (rawPhase == "failed") message else null,
                     publicUrl = if (rawPhase == "failed") publicUrl else null,
                     targetDisplay = if (rawPhase == "failed") displayTarget else null,
+                    ownership = null,
+                    connectionId = 0L,
                 ),
             )
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -202,11 +229,30 @@ class TunnelForegroundService : Service(), TunnelEventCallback {
         }
     }
 
+    private fun abandonStaleStartIntent() {
+        if (activeGeneration > 0L) return
+        val phase = TunnelServiceState.state.value.phase
+        if (phase == TunnelUiPhase.Idle || phase == TunnelUiPhase.Failed) {
+            stopSelf()
+        }
+    }
+
     private fun finishFailed(message: String) {
         activeGeneration = 0L
+        activeOwnership = null
         TunnelServiceState.update(TunnelRuntimeState(phase = TunnelUiPhase.Failed, message = message))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun stopAccountIfMatches(intent: Intent) {
+        val server = intent.getStringExtra(TunnelServiceOwnership.EXTRA_OWNERSHIP_SERVER)
+        val user = intent.getStringExtra(TunnelServiceOwnership.EXTRA_OWNERSHIP_USER)
+        val connectionId = intent.getLongExtra(TunnelServiceOwnership.EXTRA_CONNECTION_ID, 0L)
+        val ownership = activeOwnership
+        if (ownership != null && ownership.matchesStopRequest(server, user, connectionId)) {
+            stopActive()
+        }
     }
 
     private fun stopActive() {

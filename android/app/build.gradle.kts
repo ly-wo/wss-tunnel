@@ -14,8 +14,8 @@ android {
         applicationId = "com.wlzxj.tunnel"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.2"
+        versionCode = 4
+        versionName = "0.2.3"
         testInstrumentationRunner = "com.wlzxj.tunnel.TestRunner"
         testInstrumentationRunnerArguments["tunnel_origin"] = "http://127.0.0.1:19092"
         testInstrumentationRunnerArguments["tunnel_target"] = "http://127.0.0.1:19093"
@@ -101,6 +101,7 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
 
 val repoRoot = rootProject.projectDir.parentFile

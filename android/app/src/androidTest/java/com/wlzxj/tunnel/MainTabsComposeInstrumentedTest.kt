@@ -1,8 +1,12 @@
 package com.wlzxj.tunnel
 
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Rule
 import org.junit.Test
@@ -29,7 +33,19 @@ class MainTabsComposeInstrumentedTest {
     @Test
     fun connectValidationShowsError() {
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("开始连接").performClick()
-        composeRule.onNodeWithText("连接 Token 无效", substring = true).assertExists()
+        composeRule.onNodeWithTag("connect_mode_token").performClick()
+        composeRule.onNodeWithTag("connect_mode_token").assertIsSelected()
+        composeRule.onNodeWithText("开始连接").performScrollTo().performClick()
+        composeRule.waitUntil(10_000) {
+            composeRule.onAllNodesWithText("连接 Token 无效", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    @Test
+    fun connectScreenOffersLoginNavigationWhenLoggedOut() {
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("去登录").assertExists()
+        composeRule.onNodeWithText("使用当前账号").assertDoesNotExist()
     }
 }
