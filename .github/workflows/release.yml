@@ -24,6 +24,9 @@ jobs:
   android:
     needs: verify
     uses: ./.github/workflows/android.yml
+    secrets: inherit
+    with:
+      require_stable_signing: true
   container:
     needs: [verify, binaries]
     permissions:

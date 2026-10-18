@@ -38,10 +38,18 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
+import com.wlzxj.tunnel.ui.AppUpdateCard
 import com.wlzxj.tunnel.ui.AppViewModel
+import com.wlzxj.tunnel.update.UpdateViewModel
 
 @Composable
-fun AccountScreen(viewModel: AppViewModel, modifier: Modifier = Modifier) {
+fun AccountScreen(
+    viewModel: AppViewModel,
+    updateViewModel: UpdateViewModel,
+    onRequestInstall: () -> Unit,
+    onOpenInstallPermission: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val session by viewModel.session.collectAsState()
     val account by viewModel.account.collectAsState()
     val prefs by viewModel.connectionPrefs.collectAsState()
@@ -70,6 +78,12 @@ fun AccountScreen(viewModel: AppViewModel, modifier: Modifier = Modifier) {
     ) {
         Text("账号", style = MaterialTheme.typography.headlineMedium)
         account.message?.let { Text(it) }
+
+        AppUpdateCard(
+            viewModel = updateViewModel,
+            onRequestInstall = onRequestInstall,
+            onOpenInstallPermission = onOpenInstallPermission,
+        )
 
         if (session.session == null) {
             Card(Modifier.fillMaxWidth()) {

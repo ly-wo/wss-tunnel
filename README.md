@@ -27,7 +27,7 @@ docker compose pull
 docker compose up -d
 ```
 
-默认镜像为 `ghcr.io/ly-wo/wss-tunnel:0.2.3`，可通过 `.env` 的 `TUNNEL_IMAGE` 更改。源码构建需保留完整项目，在 `server` 目录执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
+默认镜像为 `ghcr.io/ly-wo/wss-tunnel:0.2.4`，可通过 `.env` 的 `TUNNEL_IMAGE` 更改。源码构建需保留完整项目，在 `server` 目录执行 `docker compose -f compose.yaml -f compose.build.yaml up -d --build`。
 
 `.env` 示例：
 
@@ -239,7 +239,7 @@ make protocols-test PYTHON=.venv/bin/python
 TUNNEL_TEST_IMAGE=wss-tunnel:local make protocols-test PYTHON=.venv/bin/python
 ```
 
-Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-image`、`make logs`、`make package`；`make client PORT=3000 NAME=demo` 或 `make client LOCAL_TARGET=https://localhost:8443` 可启动客户端。发布入口为 `make tag VERSION=0.2.3` 与 `make publish TAG=v0.2.3`，会实际触发对应 GitHub Action。
+Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-image`、`make logs`、`make package`；`make client PORT=3000 NAME=demo` 或 `make client LOCAL_TARGET=https://localhost:8443` 可启动客户端。发布入口为 `make tag VERSION=0.2.4` 与 `make publish TAG=v0.2.4`，会实际触发对应 GitHub Action。
 
 两端是同一 workspace 的子包，通过根目录 `protocol.rs` 共享协议；开发或 Docker 构建需保留完整项目，运行时客户端和服务端二进制可独立分发。集成测试使用临时目录和独立 Traefik 容器，不修改生产服务或本机信任库。验证状态见 `VALIDATION.md`。
 
@@ -255,7 +255,7 @@ Makefile 也提供 `make release`、`make docker-build`、`make up`、`make up-i
 
 ## Android 客户端
 
-`android/` 为独立 Gradle 工程（`com.wlzxj.tunnel`，versionName `0.2.3`）。隧道转发复用 `tunnel-client` 库与 `client/jni` 中的 `libtunnel_client_jni.so`，界面为 Jetpack Compose，账号 API 与桌面网页一致。
+`android/` 为独立 Gradle 工程（`com.wlzxj.tunnel`，versionName `0.2.4`）。隧道转发复用 `tunnel-client` 库与 `client/jni` 中的 `libtunnel_client_jni.so`，界面为 Jetpack Compose，账号 API 与桌面网页一致。
 
 ### 构建环境（通用）
 
@@ -330,4 +330,8 @@ adb reverse tcp:19093 tcp:19093
 
 Android Actions：main 的相关源码变更、PR 和手动运行会构建 ARM64 Debug APK，执行单元测试，并上传 `wss-tunnel-android-debug`（APK + SHA256）及测试报告，保留14天。在 [Android Actions](https://github.com/ly-wo/wss-tunnel/actions/workflows/android.yml) 中打开成功的运行，从 Artifacts 下载。
 
-后续 `vX.Y.Z` Release 也会构建安卓端，将 APK 和校验文件附到 Release，并加入总校验清单。当前提供 Debug 测试包，使用构建环境的调试签名；不同构建的签名可能不同，覆盖安装失败时需卸载旧包（会清除应用数据）。正式签名与商店发布尚未配置。
+后续 `vX.Y.Z` Release 也会构建安卓端，将 APK 和校验文件附到 Release，并加入总校验清单。
+
+**应用内更新（账号页「应用更新」）：** 未登录也可检查 GitHub 稳定版 Release（`wss-tunnel-android-arm64-debug.apk` + `.sha256`），手动下载并在校验通过后由系统安装器安装；启动时 24 小时内至多自动检查一次且不会静默下载。安装会重启应用并中断进行中的隧道。
+
+**签名与覆盖升级：** 早期 GitHub Actions 构建使用**每次随机的调试签名**，与后续包**不能**应用内覆盖升级，需手动卸载旧包（会清除数据）。仓库在 CI 中配置 `ANDROID_KEYSTORE_*` 四个 Secret 后，Debug APK 将使用**稳定调试签名**（环境变量 `ANDROID_KEYSTORE_PATH` 等，密钥不入库）；自该签名起的新版本之间支持应用内升级。Release 打 tag 时若缺少上述 Secret，Android 构建会失败。本地未设置环境变量时仍使用默认调试签名。正式 Release 变体若包名与当前 Debug 包不一致，应用会拒绝覆盖安装。

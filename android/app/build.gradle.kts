@@ -14,8 +14,8 @@ android {
         applicationId = "com.wlzxj.tunnel"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.2.3"
+        versionCode = 5
+        versionName = "0.2.4"
         testInstrumentationRunner = "com.wlzxj.tunnel.TestRunner"
         testInstrumentationRunnerArguments["tunnel_origin"] = "http://127.0.0.1:19092"
         testInstrumentationRunnerArguments["tunnel_target"] = "http://127.0.0.1:19093"
@@ -23,6 +23,18 @@ android {
             abiFilters += listOf("arm64-v8a")
             if (project.findProperty("includeX86") == "true") {
                 abiFilters += "x86_64"
+            }
+        }
+    }
+
+    signingConfigs {
+        val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+        if (!keystorePath.isNullOrBlank()) {
+            create("stableDebug") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
             }
         }
     }
@@ -39,6 +51,10 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             manifestPlaceholders["networkSecurityConfig"] = "@xml/network_security_config_debug"
+            val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+            if (!keystorePath.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("stableDebug")
+            }
         }
     }
 
@@ -93,6 +109,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlin:kotlin-test:2.1.10")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
+    testImplementation("org.json:json:20240303")
 
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")

@@ -38,6 +38,8 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.wlzxj.tunnel.service.TunnelForegroundService
 import com.wlzxj.tunnel.service.TunnelServiceOwnership
 import com.wlzxj.tunnel.ui.AppViewModel
+import com.wlzxj.tunnel.update.UpdateViewModel
+import com.wlzxj.tunnel.update.UpdateViewModelFactory
 import com.wlzxj.tunnel.ui.PendingTunnelStart
 import com.wlzxj.tunnel.ui.TunnelOwnership
 import com.wlzxj.tunnel.ui.TunnelStartRequest
@@ -46,16 +48,25 @@ import com.wlzxj.tunnel.ui.screens.ConnectScreen
 import com.wlzxj.tunnel.ui.screens.DomainsScreen
 import com.wlzxj.tunnel.ui.theme.WssTunnelTheme
 import com.wlzxj.tunnel.ui.toServiceOwnership
+import android.content.ActivityNotFoundException
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val viewModel: AppViewModel by viewModels()
+    private val updateViewModel: UpdateViewModel by viewModels {
+        UpdateViewModelFactory(application)
+    }
 
     private var pendingTunnelStart: PendingTunnelStart? = null
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             flushPendingTunnelStart()
+        }
+
+    private val installApkLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            updateViewModel.onInstallIntentLaunched()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,6 +100,7 @@ class MainActivity : ComponentActivity() {
                 var tab by rememberSaveable { mutableIntStateOf(0) }
                 LaunchedEffect(Unit) {
                     viewModel.syncActiveOwnershipFromService()
+                    updateViewModel.onStartupMaybeCheck()
                 }
                 Scaffold(
                     containerColor = MaterialTheme.colorScheme.background,
@@ -133,7 +145,13 @@ class MainActivity : ComponentActivity() {
                             onNavigateConnect = { tab = 0 },
                             modifier = Modifier.padding(padding),
                         )
-                        2 -> AccountScreen(viewModel, Modifier.padding(padding))
+                        2 -> AccountScreen(
+                            viewModel = viewModel,
+                            updateViewModel = updateViewModel,
+                            onRequestInstall = ::requestInstallUpdate,
+                            onOpenInstallPermission = { updateViewModel.openInstallPermissionSettings(this) },
+                            modifier = Modifier.padding(padding),
+                        )
                     }
                 }
             }
@@ -144,6 +162,22 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         viewModel.onUiVisible()
         viewModel.syncActiveOwnershipFromService()
+        updateViewModel.onResume(this)
+    }
+
+    private fun requestInstallUpdate() {
+        lifecycleScope.launch {
+            updateViewModel.onUserRequestInstall()
+            val intent = updateViewModel.prepareInstallIntent(this@MainActivity) ?: return@launch
+            try {
+                installApkLauncher.launch(intent)
+                updateViewModel.onInstallIntentLaunched()
+            } catch (_: SecurityException) {
+                updateViewModel.reportInstallLaunchFailure("无法启动系统安装器，请检查安装权限")
+            } catch (_: ActivityNotFoundException) {
+                updateViewModel.reportInstallLaunchFailure("本设备无法打开系统安装器")
+            }
+        }
     }
 
     private fun needsNotificationPermission(): Boolean {

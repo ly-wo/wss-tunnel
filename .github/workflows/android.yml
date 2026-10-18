@@ -2,6 +2,11 @@ name: Android
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      require_stable_signing:
+        description: Fail the job if stable signing secrets are missing (release builds)
+        type: boolean
+        default: false
   pull_request:
   push:
     branches: [main]
@@ -40,6 +45,34 @@ jobs:
         run: |
           sdkmanager --install "ndk;28.2.13676358" "platforms;android-36" "build-tools;36.0.0"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/28.2.13676358" >> "$GITHUB_ENV"
+      - name: Prepare stable debug keystore
+        if: github.event_name != 'pull_request'
+        env:
+          REQUIRE_SIGNING: ${{ inputs.require_stable_signing }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for v in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!v:-}" ]; then missing=1; fi
+          done
+          if [ "$REQUIRE_SIGNING" = "true" ] && [ "$missing" -eq 1 ]; then
+            echo "Release build requires ANDROID_KEYSTORE_* secrets (all four)."
+            exit 1
+          fi
+          if [ "$missing" -eq 0 ]; then
+            KEYSTORE_PATH="${RUNNER_TEMP}/android-stable.jks"
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+            {
+              echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH"
+              echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+              echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS"
+              echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          fi
       - name: Assemble Debug APK
         working-directory: android
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
@@ -67,3 +100,9 @@ jobs:
             android/app/build/test-results/testDebugUnitTest/
           if-no-files-found: warn
           retention-days: 14
+      - name: Cleanup signing material
+        if: always()
+        run: |
+          if [ -n "${ANDROID_KEYSTORE_PATH:-}" ] && [ -f "${ANDROID_KEYSTORE_PATH}" ]; then
+            rm -f "${ANDROID_KEYSTORE_PATH}"
+          fi

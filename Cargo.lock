@@ -1736,7 +1736,7 @@ dependencies = [
 
 [[package]]
 name = "tunnel-client"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1758,7 +1758,7 @@ dependencies = [
 
 [[package]]
 name = "tunnel-client-jni"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "jni",
@@ -1771,7 +1771,7 @@ dependencies = [
 
 [[package]]
 name = "tunnel-server"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "argon2",
