@@ -48,3 +48,7 @@ tunnel-client --target http://127.0.0.1:5199 \
 可同时设置两种方式，任一种认证通过即可访问。缺少、错误或重复的 Authorization 返回 401，不连接本地服务；HTTP 响应携带 `WWW-Authenticate` 和 `Cache-Control: no-store`。认证通过后移除 Authorization，避免域名访问凭据泄露给本地服务，因此不能用同一个 Authorization 同时传递后端业务凭据。未启用访问认证时，原有业务 Authorization 仍照常透传。
 
 公网访问与隧道连接都应使用 HTTPS/WSS。此功能由客户端执行，不是服务端账号/域名 ACL；更换为未配置访问认证的客户端会恢复公开访问。现有服务端会保留 WebSocket 拒绝的 401 状态，但不转发其认证挑战头；浏览器 WebSocket API 不能自行设置 Bearer 请求头，需使用能够发送 Authorization 的客户端，Basic 的浏览器缓存行为取决于浏览器。此功能不修改 HMR 端口或正文大小限制。
+
+## Vue / React 等前端调用
+
+可直接复制使用 [createTunnelFetch](./browser/README.md)，支持 Basic / Bearer、凭据更新和 401 错误识别，附有 Vue 3 示例。适用于同源 API 调用；首次页面认证、跨域 CORS 和 WebSocket 边界见说明。

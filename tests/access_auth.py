@@ -11,12 +11,13 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BINS = Path(os.environ.get('TUNNEL_TEST_BIN', ROOT / 'target/debug'))
+BINS = Path(os.environ.get('TUNNEL_TEST_BIN', ROOT / 'target/debug')).resolve()
 BASIC = 'Basic ' + base64.b64encode(b'visitor:pass:word').decode()
 BEARER = 'Bearer access-test-token'
 hits = []
@@ -26,7 +27,14 @@ class Backend(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_): pass
     def do_GET(self):
         hits.append((self.path, self.headers.get('Authorization')))
+        if self.path == '/redirect':
+            self.send_response(302)
+            self.send_header('Location', '/redirect-target')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
         if self.headers.get('Upgrade', '').lower() == 'websocket':
+            self.close_connection = True
             self.send_response(101)
             self.send_header('Upgrade', 'websocket')
             self.send_header('Connection', 'Upgrade')
@@ -113,6 +121,33 @@ with tempfile.TemporaryDirectory(prefix='tunnel-access-') as directory:
         for flags in [['--access-basic-username','visitor'], ['--access-basic-password-file',work/'password'], ['--access-bearer-token-file',work/'empty']]:
             result = subprocess.run([str(x) for x in base+flags], cwd=work,env=env,capture_output=True,timeout=5)
             assert result.returncode != 0
+        if '--browser' in sys.argv:
+            class BrowserRouter(http.server.BaseHTTPRequestHandler):
+                def log_message(self, *_): pass
+                def do_GET(self):
+                    name, _, path = self.path.lstrip('/').partition('/')
+                    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
+                    headers = {k: v for k, v in self.headers.items() if k.lower() != 'host'}
+                    headers['Host'] = name + '.tunnel.test'
+                    connection.request('GET', '/' + path, headers=headers)
+                    response = connection.getresponse()
+                    body = response.read()
+                    self.send_response(response.status)
+                    for key, value in response.getheaders():
+                        if key.lower() not in ['content-length', 'transfer-encoding', 'connection']:
+                            self.send_header(key, value)
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    connection.close()
+            router = http.server.ThreadingHTTPServer(('127.0.0.1', 0), BrowserRouter)
+            threading.Thread(target=router.serve_forever, daemon=True).start()
+            try:
+                subprocess.run(['node', '--experimental-strip-types', str(ROOT/'tests/browser_fetch_live.mjs')],
+                               env={**env, 'TUNNEL_BROWSER_TEST_URL': f'http://127.0.0.1:{router.server_port}/'}, check=True, timeout=30)
+            finally:
+                router.shutdown(); router.server_close()
+            assert not any(path == '/redirect-target' for path, _ in hits), 'redirect was followed'
         print('PASS: Basic/Bearer/both, HTTP + WS payloads, 401 before local access, challenges, secret stripping, open-mode compatibility, invalid CLI configuration')
     finally:
         for p in reversed(procs):
