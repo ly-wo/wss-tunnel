@@ -15,6 +15,18 @@ Cargo.lock    锁定依赖
 
 ## 扩展能力
 
+项目启动扩展可直接通过 npm 从 GitHub 安装，无需 npm registry 登录：
+
+```sh
+npm install -D git+https://github.com/ly-wo/wss-tunnel.git
+npx wss-tunnel init
+# 编辑 .env.tunnel，配置服务器、客户端位置及访问凭据文件
+npm run tunnel -- --check
+npm run tunnel
+```
+
+npm 包仅提供启动与初始化工具，底层 Rust `tunnel-client` 需单独安装或通过 `TUNNEL_CLIENT_BIN` 指定；不会在安装时下载或执行二进制。`@ly-wo/wss-tunnel` 是包元数据名称，目前未发布到 npm registry，不要使用包名安装。
+
 通过 [Node 项目级启动扩展](extensions/node/README.md)，可让 Vue、React、Node 等项目直接使用 `pnpm tunnel` / `pnpm start:tunnel` 启动隧道与 Basic/Bearer 访问认证，无需改业务源码。扩展仅编排现有客户端，传输限制与应用 Origin 保护仍然保留。
 
 ## 服务端部署
@@ -45,7 +57,7 @@ TRAEFIK_CERTRESOLVER=letsencrypt
 
 `TUNNEL_DOMAIN` 不带 `*.`。域名必须小写；`CONNECT_DOMAIN` 用于隧道接入。证书 resolver 必须已经配置 DNS-01，HTTP-01 无法签发泛域名证书。若已有证书由 Traefik 加载，删除 Compose 的 `tls.certresolver` 与 `tls.domains` 标签，保留 `tls: true`。
 
-当前用户的域名可设置为 `TUNNEL_DOMAIN=demo.wlzxj.com`、`CONNECT_DOMAIN=connect.demo.wlzxj.com`。解析 `demo.wlzxj.com` 与 `*.demo.wlzxj.com` 到服务器，网络、入口和 resolver 名称按现有配置填写。
+例如，域名可设置为 `TUNNEL_DOMAIN=tunnel.example.com`、`CONNECT_DOMAIN=connect.tunnel.example.com`。解析 `tunnel.example.com` 与 `*.tunnel.example.com` 到服务器，网络、入口和 resolver 名称按现有配置填写。
 
 服务端只有一个容器内部端口 8080；默认公网连接和访问都经 Traefik 的 443。80 入口可按下文额外启用。多套实例共用同一 Traefik 时，需要更换 Compose labels 中的 `rust-tunnel*` router/service 名称，避免冲突。
 
@@ -59,7 +71,7 @@ TRAEFIK_CERTRESOLVER=letsencrypt
 docker compose -f compose.yaml -f compose.build.yaml up -d --build
 ```
 
-访问 `https://connect.你的基础域名/`（本项目域名示例为 `https://connect.demo.wlzxj.com/`），注册、登录后管理 Token、子域名和审计记录。用户名为 3–32 位字母、数字、下划线或连字符，不区分大小写；密码为 12–128 字节。首次初始化默认允许注册，可在 `.env` 设置 `TUNNEL_ALLOW_REGISTRATION=false` 作为初始值。数据库建立后以管理后台的持久配置为准，修改环境变量不会覆盖它；关闭注册不影响已有账号登录。
+访问 `https://connect.你的基础域名/`（本项目域名示例为 `https://connect.tunnel.example.com/`），注册、登录后管理 Token、子域名和审计记录。用户名为 3–32 位字母、数字、下划线或连字符，不区分大小写；密码为 12–128 字节。首次初始化默认允许注册，可在 `.env` 设置 `TUNNEL_ALLOW_REGISTRATION=false` 作为初始值。数据库建立后以管理后台的持久配置为准，修改环境变量不会覆盖它；关闭注册不影响已有账号登录。
 
 **一个账号一个连接 Token。** 首次登录后点击创建，明文仅本次返回；重置将立即使旧 Token 无法建立新连接，已有旧 Token 隧道通常在 20 秒内断开，发送阻塞时可能再增加最多 10 秒。账号密码建立的连接不受 Token 重置影响。连接 Token 不允许管理账号；网页登录会话独立于连接 Token，12 小时到期，仅保存在页面内存中，刷新需重新登录。退出网页不会断开已有隧道。
 
@@ -68,11 +80,11 @@ docker compose -f compose.yaml -f compose.build.yaml up -d --build
 ```bash
 # 账号密码：运行时隐藏输入密码，不把密码放在命令行里
 cargo run --release --locked -p tunnel-client -- 3000 \
-  --server wss://connect.demo.wlzxj.com --username alice --name demo
+  --server wss://connect.tunnel.example.com --username alice --name demo
 
 # Token：把页面创建的 Token 写入权限为 600 的文件
 cargo run --release --locked -p tunnel-client -- 3000 \
-  --server wss://connect.demo.wlzxj.com --token-file ./token --name demo
+  --server wss://connect.tunnel.example.com --token-file ./token --name demo
 ```
 
 无人值守可使用 `--username alice --password-file ./password`，或 `TUNNEL_USERNAME` / `TUNNEL_PASSWORD_FILE`。显式账号模式优先于 `.env` 的 `TUNNEL_TOKEN_FILE`。密码连接默认要求 WSS；`--allow-insecure-auth` 只供本机明文测试。
@@ -94,7 +106,7 @@ API 位于连接域名下的 `/_tunnel/api/`：`POST register`、`POST login`，
 
 ## 管理后台（当前源码）
 
-入口为 `https://connect.demo.wlzxj.com/_tunnel/admin`，与个人账号页面分开。先从源码构建服务；正式 `0.1.0` 镜像尚未包含这项功能。
+入口为 `https://connect.tunnel.example.com/_tunnel/admin`，与个人账号页面分开。先从源码构建服务；正式 `0.1.0` 镜像尚未包含这项功能。
 
 在 `server/` 目录显式创建首个管理员，终端会隐藏输入密码：
 

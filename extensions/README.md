@@ -1,6 +1,6 @@
 # 扩展能力
 
-本目录提供独立接入方式，不要求修改业务页面、请求封装或后端接口。
+本目录提供独立接入方式，不要求修改业务页面、请求封装或后端接口。推荐通过 `npm install -D git+https://github.com/ly-wo/wss-tunnel.git` 安装，再运行 `npx wss-tunnel init`。
 
 | 扩展 | 用途 | 接入范围 |
 | --- | --- | --- |

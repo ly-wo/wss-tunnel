@@ -1,0 +1,15 @@
+{
+  "name": "@ly-wo/wss-tunnel",
+  "version": "0.1.0",
+  "description": "Project-level launcher for the Rust WSS tunnel, with Basic/Bearer public access authentication",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22.13.0" },
+  "bin": { "wss-tunnel": "extensions/node/cli.mjs" },
+  "exports": { ".": "./extensions/node/tunnel.mjs" },
+  "files": ["extensions/node/*.mjs", "extensions/node/*.example", "extensions/node/*.json", "extensions/node/README.md", "README.md"],
+  "scripts": { "test": "node --test tests/project_launcher.test.mjs tests/npm_extension.test.mjs" },
+  "repository": { "type": "git", "url": "git+https://github.com/ly-wo/wss-tunnel.git" },
+  "homepage": "https://github.com/ly-wo/wss-tunnel/tree/main/extensions/node",
+  "publishConfig": { "access": "public" }
+}

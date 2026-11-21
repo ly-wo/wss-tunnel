@@ -25,3 +25,7 @@ __pycache__/
 # Project-level tunnel runtime and private configuration
 **/.env.tunnel
 **/.local/tunnel/
+
+# npm launcher development and local package artifacts
+node_modules/
+*.tgz

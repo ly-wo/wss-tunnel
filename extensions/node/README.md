@@ -2,9 +2,33 @@
 
 让 Vue、React、Node 等项目通过自身的 npm/pnpm 脚本启动 `tunnel-client`。只添加启动脚本、本地配置及 package scripts，**不修改业务源码，不在 Vue 中注入凭据或覆盖 Fetch**。
 
-依赖 Node >= 22.13 和支持 `--access-basic-username` / `--access-bearer-token-file` 的 tunnel-client。此目录不是已发布的 npm 包，不会自动安装二进制或部署服务器。`--start` 的进程组清理支持 macOS/Linux；Windows 请自行启动应用后使用单独的 `tunnel` 命令。
+依赖 Node >= 22.13 和支持 `--access-basic-username` / `--access-bearer-token-file` 的 tunnel-client。此扩展可通过 npm 从 GitHub 安装；目前未发布到 npm registry，不会自动安装二进制或部署服务器。`--start` 的进程组清理支持 macOS/Linux；Windows 请自行启动应用后使用单独的 `tunnel` 命令。
 
-## 复制到自己的项目
+## 推荐：通过 npm 安装
+
+在业务项目根目录执行：
+
+```sh
+npm install -D git+https://github.com/ly-wo/wss-tunnel.git
+npx wss-tunnel init
+```
+
+pnpm 对应 `pnpm add -D git+https://github.com/ly-wo/wss-tunnel.git` 和 `pnpm exec wss-tunnel init`。需要固定版本时，在 Git 地址末尾加 `#<commit-sha>`。
+
+初始化命令会添加 `tunnel: wss-tunnel` / `start:tunnel: wss-tunnel --start` 两个 package scripts、创建权限为 600 的 `.env.tunnel` 模板，并追加 Git 忽略规则。已有配置不覆盖、已有业务 scripts 保留；同名命令有冲突时先报错且不修改文件。命令操作当前工作目录，不修改 node_modules 内的包或业务源码。
+
+安装后仍需按下文准备 Rust 客户端与凭据文件，编辑 `.env.tunnel`；之后运行：
+
+```sh
+npm run tunnel -- --check
+npm run tunnel
+# 需要启动应用时（已配置 TUNNEL_APP_COMMAND_JSON）：
+npm run start:tunnel
+```
+
+安装无需 npm registry 账号，因为来源是公开 GitHub 仓库。包元数据名为 `@ly-wo/wss-tunnel`，版本独立于 Rust 二进制；当前未发布到 npm registry，不能使用 `npm install @ly-wo/wss-tunnel`。包无运行时 npm 依赖、无安装钩子，不包含本机凭据或原生二进制。底层 `tunnel-client` 仍是必要运行条件。
+
+## 可选：手工复制到自己的项目
 
 从本仓库复制以下文件：
 
@@ -99,7 +123,7 @@ TUNNEL_APP_COMMAND_JSON=["node","node_modules/vite/bin/vite.js","preview","--hos
 在 wss-tunnel 仓库根目录执行：
 
 ```sh
-node --test tests/project_launcher.test.mjs
+npm test
 node --check extensions/node/tunnel.mjs
 ```
 
