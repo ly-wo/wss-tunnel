@@ -175,6 +175,7 @@ pub extern "system" fn Java_com_wlzxj_tunnel_jni_TunnelNative_nativeStart(
             ca_cert_path: None,
             local_ca_cert_path: None,
             allow_insecure_auth: allow_insecure != 0,
+            access_auth: None,
         };
         let vm = env.get_java_vm().map_err(|e| e.to_string())?;
         Ok((config, vm))

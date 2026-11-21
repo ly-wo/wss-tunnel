@@ -41,6 +41,7 @@ pub struct TunnelConfig {
     pub target: String,
     pub name: Option<String>,
     pub auth: TunnelAuth,
+    pub access_auth: Option<crate::AccessAuth>,
     pub ca_cert_path: Option<PathBuf>,
     pub local_ca_cert_path: Option<PathBuf>,
     pub allow_insecure_auth: bool,
@@ -53,6 +54,7 @@ impl std::fmt::Debug for TunnelConfig {
             .field("target", &self.target)
             .field("name", &self.name)
             .field("auth", &self.auth)
+            .field("access_auth", &self.access_auth)
             .field("ca_cert_path", &self.ca_cert_path)
             .field("local_ca_cert_path", &self.local_ca_cert_path)
             .field("allow_insecure_auth", &self.allow_insecure_auth)
@@ -310,7 +312,13 @@ pub async fn run_tunnel(
                 message = stream.next() => match message {
                     Some(Ok(Message::Text(text))) => {
                         last_seen = tokio::time::Instant::now();
-                        let packet = serde_json::from_str::<Packet>(&text)?;
+                        let mut packet = serde_json::from_str::<Packet>(&text)?;
+                        if let Some(auth) = &config.access_auth
+                            && let Some(rejection) = auth.authorize_packet(&mut packet)
+                        {
+                            tokio::time::timeout(Duration::from_secs(10), sink.send(Message::Text(serde_json::to_string(&rejection)?.into()))).await??;
+                            continue;
+                        }
                         if let Packet::Request { ref id, .. } = packet {
                             if jobs.len() >= MAX_PENDING {
                                 let response = failure(id.clone(), 503, "Local concurrency limit reached");
@@ -404,6 +412,7 @@ mod tests {
             target: "http://127.0.0.1:1".into(),
             name: None,
             auth: TunnelAuth::Token("short".into()),
+            access_auth: None,
             ca_cert_path: None,
             local_ca_cert_path: None,
             allow_insecure_auth: false,

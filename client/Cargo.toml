@@ -29,3 +29,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-pemfile = "2"
 webpki-roots = "1"
 rpassword = "7"
+
+sha2 = "0.10"
+subtle = "2"
