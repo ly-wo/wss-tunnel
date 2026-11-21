@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "tunnel": "node scripts/tunnel.mjs",
+    "start:tunnel": "node scripts/tunnel.mjs --start"
+  }
+}

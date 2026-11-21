@@ -21,3 +21,7 @@ __pycache__/
 /android/app/src/main/jniLibs/
 /.idea/
 /.ai-handoff/
+
+# Project-level tunnel runtime and private configuration
+**/.env.tunnel
+**/.local/tunnel/

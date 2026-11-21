@@ -13,6 +13,10 @@ Cargo.lock    锁定依赖
 
 > 账号管理、管理后台、可配置名额和详细审计从 `0.2.0` 提供；旧 `0.1.0` 镜像不包含这些能力。二进制及镜像是否已生成以对应 Release 流程结果为准；发布完成前可使用下文的源码构建命令。
 
+## 扩展能力
+
+通过 [Node 项目级启动扩展](extensions/node/README.md)，可让 Vue、React、Node 等项目直接使用 `pnpm tunnel` / `pnpm start:tunnel` 启动隧道与 Basic/Bearer 访问认证，无需改业务源码。扩展仅编排现有客户端，传输限制与应用 Origin 保护仍然保留。
+
 ## 服务端部署
 
 需要 Docker Compose、Traefik v3（启用 Docker provider）和现有 Docker 网络。默认拉取已发布的服务端镜像，无需在服务器编译 Rust。使用与服务端相同版本的客户端。

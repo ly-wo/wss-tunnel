@@ -1,0 +1,3 @@
+# Append to the consuming project's .gitignore; do not replace existing rules.
+.env.tunnel
+.local/tunnel/
