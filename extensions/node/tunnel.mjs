@@ -41,6 +41,19 @@ export function tunnelPlan(root, env = process.env) {
   for (const [key, flag] of [['TUNNEL_CA_CERT', '--ca-cert'], ['TUNNEL_LOCAL_CA_CERT', '--local-ca-cert']]) {
     if (config[key]) args.push(flag, file(key));
   }
+  if (config.TUNNEL_HTTP_SSE !== undefined) {
+    if (!['auto', 'off'].includes(config.TUNNEL_HTTP_SSE)) throw new Error('TUNNEL_HTTP_SSE 必须为 auto 或 off');
+    args.push('--http-sse', config.TUNNEL_HTTP_SSE);
+  }
+  for (const [key, flag, max] of [
+    ['TUNNEL_SSE_MAX_STREAMS', '--sse-max-streams', 8],
+    ['TUNNEL_SSE_IDLE_TIMEOUT', '--sse-idle-timeout', Number.MAX_SAFE_INTEGER],
+    ['TUNNEL_SSE_BACKPRESSURE_TIMEOUT', '--sse-backpressure-timeout', Number.MAX_SAFE_INTEGER],
+  ]) {
+    if (config[key] === undefined) continue;
+    if (!/^[1-9][0-9]*$/.test(config[key]) || !Number.isSafeInteger(Number(config[key])) || Number(config[key]) > max) throw new Error(`${key} 超出有效范围`);
+    args.push(flag, config[key]);
+  }
   const configuredBin = config.TUNNEL_CLIENT_BIN;
   const bundledBin = path.join(root, '.local/tunnel', process.platform === 'win32' ? 'tunnel-client.exe' : 'tunnel-client');
   const bin = configuredBin ? ((configuredBin.includes('/') || configuredBin.includes('\\')) ? path.resolve(root, configuredBin) : configuredBin)
@@ -62,8 +75,8 @@ export function tunnelPlan(root, env = process.env) {
 export function verifyClient(plan) {
   const result = spawnSync(plan.bin, ['--help'], { env: plan.env, encoding: 'utf8', timeout: 10_000 });
   if (result.error || result.status !== 0) throw new Error('无法运行 tunnel-client；请配置 TUNNEL_CLIENT_BIN 或安装到 .local/tunnel/tunnel-client');
-  for (const flag of ['--access-basic-username', '--access-basic-password-file', '--access-bearer-token-file']) {
-    if (!result.stdout.includes(flag)) throw new Error('tunnel-client 版本过旧，请使用包含 Basic/Bearer 访问认证的新版本');
+  for (const flag of ['--access-basic-username', '--access-basic-password-file', '--access-bearer-token-file', ...plan.args.filter(arg => ['--http-sse', '--sse-max-streams', '--sse-idle-timeout', '--sse-backpressure-timeout'].includes(arg))]) {
+    if (!result.stdout.includes(flag)) throw new Error(`tunnel-client 版本过旧，不支持 ${flag}，请更新客户端或移除不支持的可选参数`);
   }
 }
 

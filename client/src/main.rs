@@ -10,6 +10,14 @@ use tunnel_client::{AccessAuth, TunnelAuth, TunnelConfig, TunnelPhase, run_tunne
 struct Args {
     #[arg(value_parser=clap::value_parser!(u16).range(1..), required_unless_present="target", conflicts_with="target")]
     port: Option<u16>,
+    #[arg(long, env="TUNNEL_HTTP_SSE", default_value="auto", value_parser=["auto", "off"])]
+    http_sse: String,
+    #[arg(long, env="TUNNEL_SSE_MAX_STREAMS", default_value="8", value_parser=clap::value_parser!(u16).range(1..=8))]
+    sse_max_streams: u16,
+    #[arg(long, env="TUNNEL_SSE_IDLE_TIMEOUT", default_value="45", value_parser=clap::value_parser!(u64).range(1..))]
+    sse_idle_timeout: u64,
+    #[arg(long, env="TUNNEL_SSE_BACKPRESSURE_TIMEOUT", default_value="60", value_parser=clap::value_parser!(u64).range(1..))]
+    sse_backpressure_timeout: u64,
     #[arg(long, env = "TUNNEL_TARGET")]
     target: Option<String>,
     #[arg(long, env = "TUNNEL_LOCAL_CA_CERT")]
@@ -114,6 +122,12 @@ async fn main() -> Result<()> {
     };
 
     let config = TunnelConfig {
+        sse: tunnel_client::SseConfig {
+            enabled: args.http_sse == "auto",
+            max_streams: args.sse_max_streams as usize,
+            idle_timeout: Duration::from_secs(args.sse_idle_timeout),
+            backpressure_timeout: Duration::from_secs(args.sse_backpressure_timeout),
+        },
         server: args.server,
         target,
         name: args.name,

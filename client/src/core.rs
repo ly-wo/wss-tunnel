@@ -37,6 +37,7 @@ impl std::fmt::Debug for TunnelAuth {
 
 #[derive(Clone)]
 pub struct TunnelConfig {
+    pub sse: crate::sse::SseConfig,
     pub server: String,
     pub target: String,
     pub name: Option<String>,
@@ -50,6 +51,7 @@ pub struct TunnelConfig {
 impl std::fmt::Debug for TunnelConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TunnelConfig")
+            .field("sse", &self.sse)
             .field("server", &self.server)
             .field("target", &self.target)
             .field("name", &self.name)
@@ -80,7 +82,7 @@ pub struct TunnelEvent {
     pub message: Option<String>,
 }
 
-fn failure(id: String, status: u16, message: &str) -> Packet {
+pub(crate) fn failure(id: String, status: u16, message: &str) -> Packet {
     Packet::Response {
         id,
         status,
@@ -151,7 +153,8 @@ async fn forward(http: reqwest::Client, target: Target, packet: Packet) -> Packe
             body: STANDARD.encode(body),
         },
         Ok(Err(e)) => {
-            eprintln!("Local request failed: {e}");
+            let _ = e; // reqwest error text may contain a sensitive URL.
+            eprintln!("local_http end=upstream_error");
             failure(id, 502, "Local service unavailable or invalid response")
         }
         Err(_) => failure(id, 504, "Local service timed out"),
@@ -191,6 +194,7 @@ pub async fn run_tunnel(
     );
 
     let run_result: Result<()> = async {
+    ensure!((1..=crate::http_sse::MAX_STREAMS).contains(&config.sse.max_streams) && !config.sse.idle_timeout.is_zero() && !config.sse.backpressure_timeout.is_zero(), "Invalid SSE configuration");
     let target = Target::new(&config.target)?;
     let mut url = crate::target::server_url(&config.server)?;
     if let Some(name) = &config.name {
@@ -230,6 +234,8 @@ pub async fn run_tunnel(
         .headers_mut()
         .insert("authorization", authorization.parse()?);
 
+    if config.sse.enabled { request.headers_mut().insert("x-tunnel-negotiation", "1".parse()?); }
+
     let tls = client_config_from_path(config.ca_cert_path.as_deref())?;
     let local_tls = client_config_from_path(config.local_ca_cert_path.as_deref())?;
 
@@ -251,17 +257,8 @@ pub async fn run_tunnel(
         }
     };
 
-    let mut http = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .timeout(Duration::from_secs(30));
-    if let Some(path) = config.local_ca_cert_path.as_deref() {
-        let mut reader = std::io::BufReader::new(std::fs::File::open(path)?);
-        for cert in rustls_pemfile::certs(&mut reader) {
-            http = http.add_root_certificate(reqwest::Certificate::from_der(cert?.as_ref())?);
-        }
-    }
-    let http = http.build()?;
+    let http = build_http(&config, true)?;
+    let streaming_http = build_http(&config, false)?;
     let streams = websocket::Streams::default();
     let (mut sink, mut stream) = socket.split();
 
@@ -275,13 +272,25 @@ pub async fn run_tunnel(
         }
     };
 
-    let public_url = match first {
+    let (public_url, offered) = match first {
         Some(Ok(Message::Text(text))) => match serde_json::from_str::<Packet>(&text)? {
-            Packet::Ready { url } => url,
+            Packet::Ready { url, negotiation } => (url, negotiation),
             _ => bail!("Unexpected handshake"),
         },
         _ => bail!("Server did not assign a public URL"),
     };
+    let sse_enabled = if let Some(offer) = offered {
+        ensure!(config.sse.enabled && offer.is_sse("offer"), "Invalid SSE negotiation");
+        let confirm = Packet::Ready { url: public_url.clone(), negotiation: Some(crate::protocol::Negotiation::sse("confirm")) };
+        tokio::time::timeout(Duration::from_secs(10), sink.send(Message::Text(serde_json::to_string(&confirm)?.into()))).await??;
+        let active = tokio::select! {
+            _ = cancel.cancelled() => return Ok(()),
+            result = tokio::time::timeout(Duration::from_secs(10), stream.next()) => result?,
+        };
+        let Some(Ok(Message::Text(text))) = active else { bail!("Missing SSE confirmation") };
+        ensure!(matches!(serde_json::from_str::<Packet>(&text)?, Packet::Ready { url, negotiation: Some(n) } if url == public_url && n.is_sse("active")), "Invalid SSE confirmation");
+        true
+    } else { false };
 
     emit(
         generation,
@@ -292,7 +301,24 @@ pub async fn run_tunnel(
         None,
     );
 
-    let (tx, mut rx) = mpsc::channel::<Packet>(MAX_PENDING);
+    let (tx, sse_tx, control, mut outgoing) = crate::wire::channel();
+    let sse = crate::sse::Runtime::new(streaming_http, target.clone(), config.sse.clone(), sse_tx, tx.clone(), cancel.clone());
+    let mut writer = JoinSet::new();
+    let writer_sse = sse.clone();
+    writer.spawn(async move {
+        while let Some(frame) = outgoing.next().await {
+            let message = match frame {
+                crate::wire::Out::Packet(packet) => {
+                    if !writer_sse.sending(&packet) { continue; }
+                    Message::Text(serde_json::to_string(&packet)?.into())
+                }
+                crate::wire::Out::Ping(data) => Message::Ping(data.into()),
+                crate::wire::Out::Pong(data) => Message::Pong(data.into()),
+            };
+            tokio::time::timeout(Duration::from_secs(10), sink.send(message)).await??;
+        }
+        Ok::<(), anyhow::Error>(())
+    });
     let mut jobs = JoinSet::new();
     let mut last_seen = tokio::time::Instant::now();
     let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
@@ -303,26 +329,28 @@ pub async fn run_tunnel(
                 _ = cancel.cancelled() => break,
                 _ = heartbeat.tick() => {
                     ensure!(last_seen.elapsed() < Duration::from_secs(60), "Server heartbeat timed out");
-                    tokio::time::timeout(Duration::from_secs(10), sink.send(Message::Ping(Vec::new().into()))).await??;
+                    control.try_send(crate::wire::Out::Ping(Vec::new())).map_err(|_| anyhow::anyhow!("Control queue full"))?;
                 }
                 Some(_) = jobs.join_next(), if !jobs.is_empty() => {}
-                Some(packet) = rx.recv() => {
-                    tokio::time::timeout(Duration::from_secs(10), sink.send(Message::Text(serde_json::to_string(&packet)?.into()))).await??;
-                }
+                _ = writer.join_next() => bail!("Tunnel writer stopped"),
                 message = stream.next() => match message {
                     Some(Ok(Message::Text(text))) => {
                         last_seen = tokio::time::Instant::now();
                         let mut packet = serde_json::from_str::<Packet>(&text)?;
+                        ensure!(crate::http_sse::valid_packet(&packet, text.len()), "Invalid SSE envelope");
                         if let Some(auth) = &config.access_auth
                             && let Some(rejection) = auth.authorize_packet(&mut packet)
                         {
-                            tokio::time::timeout(Duration::from_secs(10), sink.send(Message::Text(serde_json::to_string(&rejection)?.into()))).await??;
+                            control.try_send(crate::wire::Out::Packet(rejection)).map_err(|_| anyhow::anyhow!("Control queue full"))?;
                             continue;
                         }
                         if let Packet::Request { ref id, .. } = packet {
                             if jobs.len() >= MAX_PENDING {
                                 let response = failure(id.clone(), 503, "Local concurrency limit reached");
-                                tokio::time::timeout(Duration::from_secs(10), sink.send(Message::Text(serde_json::to_string(&response)?.into()))).await??;
+                                control.try_send(crate::wire::Out::Packet(response)).map_err(|_| anyhow::anyhow!("Control queue full"))?;
+                            } else if sse_enabled && matches!(&packet, Packet::Request { method, .. } if method == "GET") {
+                                let guard = sse.register(id)?;
+                                jobs.spawn(sse.clone().forward(packet, guard));
                             } else {
                                 let http = http.clone();
                                 let tx = tx.clone();
@@ -340,7 +368,7 @@ pub async fn run_tunnel(
                                     headers: vec![],
                                     protocol: None,
                                 };
-                                tokio::time::timeout(Duration::from_secs(10), sink.send(Message::Text(serde_json::to_string(&response)?.into()))).await??;
+                                control.try_send(crate::wire::Out::Packet(response)).map_err(|_| anyhow::anyhow!("Control queue full"))?;
                             } else {
                                 let (in_tx, in_rx) = websocket::channel();
                                 ensure!(!streams.lock().unwrap().contains_key(id), "Duplicate WebSocket stream id");
@@ -351,12 +379,18 @@ pub async fn run_tunnel(
                             websocket::dispatch(&streams, &id, frame);
                         } else if let Packet::WsClose { id } = packet {
                             streams.lock().unwrap().remove(&id);
+                        } else if sse_enabled && matches!(packet, Packet::SseCancel { .. } | Packet::SseWindow { .. }) {
+                            match packet {
+                                Packet::SseCancel { id } => sse.cancel(&id),
+                                Packet::SseWindow { id, ack_seq } => sse.ack(&id, ack_seq)?,
+                                _ => unreachable!(),
+                            }
                         } else {
                             bail!("Unexpected server packet");
                         }
                     }
                     Some(Ok(Message::Ping(p))) => {
-                        tokio::time::timeout(Duration::from_secs(10), sink.send(Message::Pong(p))).await??;
+                        control.try_send(crate::wire::Out::Pong(p.to_vec())).map_err(|_| anyhow::anyhow!("Control queue full"))?;
                     }
                     Some(Ok(Message::Pong(_))) => last_seen = tokio::time::Instant::now(),
                     Some(Ok(Message::Close(_))) | None => bail!("Tunnel disconnected"),
@@ -371,7 +405,7 @@ pub async fn run_tunnel(
     loop_result?;
 
     jobs.abort_all();
-    let _ = tokio::time::timeout(Duration::from_secs(2), sink.close()).await;
+    writer.abort_all();
     Ok(())
     }
     .await;
@@ -401,6 +435,24 @@ pub async fn run_tunnel(
     }
 }
 
+fn build_http(config: &TunnelConfig, total_timeout: bool) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy();
+    if total_timeout {
+        builder = builder.timeout(Duration::from_secs(30));
+    } else {
+        builder = builder.pool_max_idle_per_host(8);
+    }
+    if let Some(path) = config.local_ca_cert_path.as_deref() {
+        let mut reader = std::io::BufReader::new(std::fs::File::open(path)?);
+        for cert in rustls_pemfile::certs(&mut reader) {
+            builder = builder.add_root_certificate(reqwest::Certificate::from_der(cert?.as_ref())?);
+        }
+    }
+    Ok(builder.build()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,6 +460,7 @@ mod tests {
     #[test]
     fn token_auth_requires_length_and_emits_failed() {
         let cfg = TunnelConfig {
+            sse: Default::default(),
             server: "https://example.com".into(),
             target: "http://127.0.0.1:1".into(),
             name: None,

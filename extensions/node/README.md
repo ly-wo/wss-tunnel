@@ -114,7 +114,7 @@ TUNNEL_APP_COMMAND_JSON=["node","node_modules/vite/bin/vite.js","preview","--hos
 
 ## 能力边界
 
-此扩展只负责编排现有客户端，不修改隧道协议或应用安全策略。当前 HTTP 正文 5 MiB 限制、完整缓冲及超时仍然存在，SSE 无法直接实时流式传输；应用的 Host/Origin 检查也不会自动放宽。开发服务的独立 HMR 端口不会自动转发。
+此扩展只负责编排现有客户端，不修改隧道协议或应用安全策略。普通 HTTP 正文仍受 5 MiB 限制、完整缓冲及超时约束；新版客户端与服务端成功协商后支持 SSE 流式响应，旧端或关闭能力时仍使用原整包路径；应用的 Host/Origin 检查也不会自动放宽。开发服务的独立 HMR 端口不会自动转发。
 
 因此，“应用就绪、隧道连接成功”不等于所有业务接口、实时事件和大文件已验收。需要这些能力时，应在隧道/网关层单独适配，不通过覆盖前端 Fetch 或取消业务安全检查来绕过。
 
@@ -128,3 +128,19 @@ node --check extensions/node/tunnel.mjs
 ```
 
 测试覆盖 Basic/Bearer 参数隔离、凭据不出现在参数中、健康地址和启动命令校验、旧客户端拒绝、启动失败传递、保留已有应用以及清理本次创建的进程。测试使用本地 HTTP fixture 和模拟客户端，不代表远端部署或公网认证验收。
+
+
+## SSE 可选参数
+
+新版 Rust 两端默认自动协商 SSE。Node 扩展可在 `.env.tunnel` 指定下列选项，经过校验后以命令行参数传给客户端：
+
+```dotenv
+TUNNEL_HTTP_SSE=auto
+TUNNEL_SSE_MAX_STREAMS=8
+TUNNEL_SSE_IDLE_TIMEOUT=45
+TUNNEL_SSE_BACKPRESSURE_TIMEOUT=60
+```
+
+`TUNNEL_HTTP_SSE=off` 后重启隧道即可关闭；max streams 允许 1～8，超时单位为正整数秒。服务端也支持独立关闭和名额限制。旧二进制缺少显式配置的选项时，启动器在连接前报错；回退到旧客户端时移除这些可选配置，不能只设置 off 后把新参数传给旧程序。未填写 SSE 配置不会给旧客户端追加新参数。
+
+SSE 需要 `GET` 和上游 `200 text/event-stream`，普通 HTTP 仍保持 30/35 秒窗口。背压暂停读取时不计入上游空闲；不修改调用方源码或浏览器重连逻辑。npm 启动器本身不替代 Rust 二进制升级，也不负责发布服务器。

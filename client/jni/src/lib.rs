@@ -168,6 +168,7 @@ pub extern "system" fn Java_com_wlzxj_tunnel_jni_TunnelNative_nativeStart(
         };
 
         let config = TunnelConfig {
+            sse: Default::default(),
             server,
             target,
             name: name_opt,

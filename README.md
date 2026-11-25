@@ -234,8 +234,8 @@ docker compose -f compose.yaml -f compose.http.yaml up -d --pull always
 - 指定或随机子域名、认证、并发请求、重名保护、心跳、请求超时与断线清理。
 - 本机 HTTP/HTTPS 与 WebSocket/WSS；保留 `3000` 端口简写，等同于 `--target http://127.0.0.1:3000`。
 - WebSocket 双向文本/二进制消息、子协议协商、关闭码与原因；Ping/Pong 在各段连接本地处理。HMR 所需的 WebSocket 通道已支持，具体开发框架的公网地址和 Origin 配置需单独确认。
-- HTTP 请求/响应正文与单条 WebSocket 消息最多 5 MiB，均按完整正文或消息缓存；本地 HTTP 请求超时 30 秒，公网等待最多 35 秒；每条隧道的在途 HTTP 请求和活动 WebSocket 合计最多 32 个，服务器最多 128 条隧道。拥塞或慢消费者可能导致对应 WebSocket 关闭。
-- 不支持 SSE、HTTP 流式下载或任意 TCP/UDP。客户端和服务端应一起升级，旧版本客户端不识别新增的 WebSocket 消息协议。
+- 普通 HTTP 请求/响应正文与单条 WebSocket 消息最多 5 MiB，按完整正文或消息缓存；普通本地 HTTP 请求超时 30 秒，公网等待最多 35 秒。每条隧道的 HTTP 请求、SSE 和 WebSocket 合计最多 32 个，服务器最多 128 条隧道。拥塞或慢消费者可能导致连接关闭。
+- SSE 需要两端成功协商 `http_sse_v1`；旧端或关闭能力时回到原整包 HTTP 限制。非 SSE 的 HTTP 流式下载和任意 TCP/UDP 不支持。早于 WebSocket 协议扩展的版本仍需一起升级以使用 WebSocket。
 - 访问 URL 默认公开，认证 Token 保护隧道建立，不代替业务服务的登录认证。
 
 ## 开发与验证
@@ -351,3 +351,39 @@ Android Actions：main 的相关源码变更、PR 和手动运行会构建 ARM64
 **应用内更新（账号页「应用更新」）：** 未登录也可检查 GitHub 稳定版 Release（`wss-tunnel-android-arm64-debug.apk` + `.sha256`），手动下载并在校验通过后由系统安装器安装；启动时 24 小时内至多自动检查一次且不会静默下载。安装会重启应用并中断进行中的隧道。
 
 **签名与覆盖升级：** 早期 GitHub Actions 构建使用**每次随机的调试签名**，与后续包**不能**应用内覆盖升级，需手动卸载旧包（会清除数据）。仓库在 CI 中配置 `ANDROID_KEYSTORE_*` 四个 Secret 后，Debug APK 将使用**稳定调试签名**（环境变量 `ANDROID_KEYSTORE_PATH` 等，密钥不入库）；自该签名起的新版本之间支持应用内升级。Release 打 tag 时若缺少上述 Secret，Android 构建会失败。本地未设置环境变量时仍使用默认调试签名。正式 Release 变体若包名与当前 Debug 包不一致，应用会拒绝覆盖安装。
+
+
+## SSE 流式响应
+
+新版两端默认 `--http-sse auto`。隧道认证成功后，通过 Ready 的 offer / confirm / active 完成能力协商；未确认前不发送 SSE 消息。任一端 `--http-sse off`（环境变量 `TUNNEL_HTTP_SSE=off`）并重新连接即可关闭。旧端不声明能力时自动使用原 HTTP 协议；旧协议仍会完整缓冲 SSE 并受 30/35 秒超时影响。
+
+仅对 GET、Accept 允许、上游返回 `200 text/event-stream` 的响应逐块转发。Accept 支持参数、重复字段、通配和 q 值，显式 q=0 优先于宽泛通配；无 Accept 视为接受任意类型。非 GET、非 SSE 类型、错误状态及普通 JSON 仍使用整包 Response。转发保持字节顺序，不解析或重新生成事件；普通 HTTP 和 WebSocket 的认证行为不变。
+
+每帧原始数据最多 16 KiB，每流最多 4 帧未确认。服务端 Body 消费后才返回累计额度；每端每条隧道默认最多 8 条 SSE，占用原 32 个总并发名额，Body 结束或丢弃才释放服务端许可。接收循环不等待单流队列；独立 writer 在有界控制、普通和 SSE 队列间调度。共享 WebSocket/TCP 仍有传输级等待，不能保证完全隔离。
+
+客户端参数（也可通过 Node 扩展显式透传）：
+
+| 参数 | 环境变量 | 默认值 |
+| --- | --- | --- |
+| `--http-sse auto/off` | `TUNNEL_HTTP_SSE` | auto；客户端和服务端均支持 |
+| `--sse-max-streams 1..8` | `TUNNEL_SSE_MAX_STREAMS` | 8；客户端和服务端各自限制 |
+| `--sse-idle-timeout <秒>` | `TUNNEL_SSE_IDLE_TIMEOUT` | 45；仅客户端 |
+| `--sse-backpressure-timeout <秒>` | `TUNNEL_SSE_BACKPRESSURE_TIMEOUT` | 60；仅客户端 |
+
+候选请求在收到响应头前仍用 30 秒截止时间；若最终返回普通响应，正文只能使用剩余时间，避免较短的 SSE 首包窗口误杀普通请求。确认 SSE 后不再使用总时限；等待上游数据时计空闲，等待额度时暂停空闲计时并单独计背压停滞。普通候选请求不会因切换计时而被重发。
+
+首部前连接/协议错误返回 502，名额不足 503，超时 504；首部后正常 EOF 正常结束，读流失败、空闲/背压超时、隧道断线使 HTTP Body 异常中止。取消会停止上游读取；日志不记录原始请求路径、查询、凭据或正文。
+
+64 KiB 是单流协议窗口，不是进程内存上限。客户端 SSE 队列最多 40 条，Data 使用 Base64（16 KiB 原始数据编码后 21,848 字节）；服务端每流队列最多 4 条数据加终态。还需计算每任务一个 reqwest chunk、序列化暂存、原有 8 MiB 消息解析缓冲、HTTP/TLS/内核缓冲及分配器开销。慢消费者测试验证上游写入进入平台期；不把该结果当成跨平台固定 RSS 保证。
+
+项目内验证：
+
+```sh
+cargo test --locked -p tunnel-client -p tunnel-server
+cargo build --locked -p tunnel-client -p tunnel-server
+python3 tests/sse.py
+python3 tests/access_auth.py
+npm test
+```
+
+`tests/sse.py` 含真实超过 30 秒连接、20 秒普通响应回退、首包超时、取消、异常 EOF、空闲、背压、认证和限额测试。真实新旧组合需先从未修改的 `ab3b6c6` 源码独立构建旧客户端/服务端，再传 `--legacy-dir <旧二进制目录>`；未提供时明确跳过，不能用新版关闭开关代替旧版。`--quick` 仅用于调试，会跳过长时间场景。上述测试不依赖业务项目或公网部署。

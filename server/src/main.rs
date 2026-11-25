@@ -1,8 +1,13 @@
 mod auth;
+#[path = "../../http_sse.rs"]
+mod http_sse;
 #[path = "../../protocol.rs"]
 mod protocol;
 mod request_meta;
+mod sse;
 mod websocket;
+#[path = "../../wire.rs"]
+mod wire;
 use anyhow::{Context, Result, ensure};
 use axum::{
     Router,
@@ -29,6 +34,10 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 #[derive(Parser)]
 struct Args {
+    #[arg(long, env="TUNNEL_HTTP_SSE", default_value="auto", value_parser=["auto", "off"])]
+    http_sse: String,
+    #[arg(long, env="TUNNEL_SSE_MAX_STREAMS", default_value="8", value_parser=clap::value_parser!(u16).range(1..=8))]
+    sse_max_streams: u16,
     #[arg(long, env="TUNNEL_PUBLIC_SCHEME", default_value="https", value_parser=["http","https"])]
     public_scheme: String,
     #[arg(long, env = "TUNNEL_DOMAIN")]
@@ -57,6 +66,11 @@ struct Args {
 type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Packet>>>>;
 #[derive(Clone)]
 struct Tunnel {
+    sse_enabled: bool,
+    sse_slots: Arc<Semaphore>,
+    sse_streams: sse::Streams,
+    sse_heads: Arc<Mutex<std::collections::HashSet<String>>>,
+    control: mpsc::Sender<wire::Out>,
     tx: mpsc::Sender<Packet>,
     pending: Pending,
     slots: Arc<Semaphore>,
@@ -68,6 +82,8 @@ struct Connection {
     cancel: CancellationToken,
 }
 struct App {
+    http_sse: bool,
+    sse_max_streams: usize,
     domain: String,
     connect_domain: String,
     public_scheme: String,
@@ -116,6 +132,10 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let args = Args::parse();
     ensure!(
+        args.sse_max_streams as usize <= http_sse::MAX_STREAMS,
+        "Invalid SSE limit"
+    );
+    ensure!(
         domain_valid(&args.domain)
             && (domain_valid(&args.connect_domain) || args.connect_domain == "localhost"),
         "Use lowercase DNS names, without scheme or wildcard"
@@ -149,6 +169,8 @@ async fn main() -> Result<()> {
         }
     }
     let app = Arc::new(App {
+        http_sse: args.http_sse == "auto",
+        sse_max_streams: args.sse_max_streams as usize,
         domain: args.domain,
         connect_domain: args.connect_domain,
         public_scheme: args.public_scheme,
@@ -238,6 +260,11 @@ async fn route(app: Arc<App>, req: Request) -> Response {
                 Err(error) => return error.into_response(),
             }
         };
+        let negotiate_sse = app.http_sse
+            && req
+                .headers()
+                .get("x-tunnel-negotiation")
+                .is_some_and(|v| v == "1");
         let Ok(permit) = app.slots.clone().try_acquire_owned() else {
             return reply(StatusCode::SERVICE_UNAVAILABLE, "Connection limit reached");
         };
@@ -293,7 +320,7 @@ async fn route(app: Arc<App>, req: Request) -> Response {
             .on_upgrade(move |socket| async move {
                 let _permit = permit;
                 request_meta::CONTEXT
-                    .scope(meta, session(app, socket, lease, identity))
+                    .scope(meta, session(app, socket, lease, identity, negotiate_sse))
                     .await;
             });
     }
@@ -321,8 +348,9 @@ async fn forward(tunnel: Tunnel, req: Request) -> Response {
     if req.headers().contains_key("upgrade") {
         return websocket::upgrade(tunnel, req, permit).await;
     }
-    let _permit = permit;
     let (parts, body) = req.into_parts();
+    let candidate = tunnel.sse_enabled && parts.method == http::Method::GET;
+    let accept = parts.headers.clone();
     let data = match tokio::time::timeout(Duration::from_secs(30), to_bytes(body, MAX_BODY)).await {
         Ok(Ok(b)) => b,
         Ok(Err(_)) => {
@@ -349,14 +377,17 @@ async fn forward(tunnel: Tunnel, req: Request) -> Response {
     let (tx, rx) = oneshot::channel();
     tunnel.pending.lock().unwrap().insert(id.clone(), tx);
     // Always remove the pending sender if this HTTP task is cancelled/disconnected.
-    let _guard = PendingGuard {
-        id,
-        pending: tunnel.pending.clone(),
+    let mut guard = sse::Guard {
+        id: id.clone(),
+        tunnel: tunnel.clone(),
+        _permit: Some(permit),
+        _sse_permit: None,
+        cancel_peer: candidate,
     };
     if tunnel.tx.try_send(packet).is_err() {
         return reply(StatusCode::BAD_GATEWAY, "Tunnel disconnected or busy");
     }
-    match tokio::time::timeout(Duration::from_secs(35), rx).await {
+    let response = match tokio::time::timeout(Duration::from_secs(35), rx).await {
         Ok(Ok(Packet::Response {
             status,
             headers,
@@ -386,18 +417,32 @@ async fn forward(tunnel: Tunnel, req: Request) -> Response {
             *response.headers_mut() = headers;
             response
         }
-        Err(_) => reply(StatusCode::GATEWAY_TIMEOUT, "Local service timed out"),
-        _ => reply(StatusCode::BAD_GATEWAY, "Tunnel disconnected"),
-    }
-}
-struct PendingGuard {
-    id: String,
-    pending: Pending,
-}
-impl Drop for PendingGuard {
-    fn drop(&mut self) {
-        self.pending.lock().unwrap().remove(&self.id);
-    }
+        Ok(Ok(Packet::SseHead {
+            status, headers, ..
+        })) if candidate => {
+            let restored = protocol::restore(headers.clone());
+            if !http_sse::valid_head(&headers)
+                || !restored
+                    .as_ref()
+                    .is_ok_and(|h| http_sse::selected(&accept, status, h))
+            {
+                return reply(StatusCode::BAD_GATEWAY, "Invalid SSE response");
+            }
+            let Ok(sse_permit) = tunnel.sse_slots.clone().try_acquire_owned() else {
+                return reply(StatusCode::SERVICE_UNAVAILABLE, "SSE stream limit reached");
+            };
+            guard._sse_permit = Some(sse_permit);
+            let body = sse::ResponseStream::new(guard);
+            sse::control(&tunnel, Packet::SseWindow { id, ack_seq: 0 });
+            let mut response = Response::new(Body::from_stream(body));
+            *response.headers_mut() = restored.unwrap();
+            return response;
+        }
+        Err(_) => return reply(StatusCode::GATEWAY_TIMEOUT, "Local service timed out"),
+        _ => return reply(StatusCode::BAD_GATEWAY, "Tunnel disconnected"),
+    };
+    guard.cancel_peer = false;
+    response
 }
 // The lease is dropped even if WebSocket upgrade fails, releasing the reservation.
 struct NameLease {
@@ -417,76 +462,139 @@ async fn session(
     socket: WebSocket,
     lease: NameLease,
     identity: Option<auth::Identity>,
+    negotiate_sse: bool,
 ) {
-    let (tx, mut rx) = mpsc::channel(MAX_PENDING);
-    let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
-    let streams = websocket::Streams::default();
+    let (tx, _data, control, mut outgoing) = wire::channel();
+    let tunnel = Tunnel {
+        tx,
+        control: control.clone(),
+        pending: Default::default(),
+        slots: Arc::new(Semaphore::new(MAX_PENDING)),
+        streams: Default::default(),
+        cancel: lease.cancel.clone(),
+        sse_enabled: negotiate_sse,
+        sse_slots: Arc::new(Semaphore::new(app.sse_max_streams)),
+        sse_streams: Default::default(),
+        sse_heads: Default::default(),
+    };
     let host = lease.host.clone();
     let cancel = lease.cancel.clone();
-    // Serialize publication with disable. The lease already existed before upgrade,
-    // so disabling also cancels connections whose WebSocket upgrade is still pending.
-    let changes = app.domain_changes.lock().await;
-    if cancel.is_cancelled() {
-        return;
-    }
-    app.tunnels.lock().unwrap().insert(
-        host.clone(),
-        Tunnel {
-            tx,
-            pending: pending.clone(),
-            slots: Arc::new(Semaphore::new(MAX_PENDING)),
-            streams: streams.clone(),
-            cancel: cancel.clone(),
-        },
-    );
-    drop(changes);
     let name = host
         .strip_suffix(&format!(".{}", app.domain))
         .unwrap_or(&host)
         .to_owned();
     let run = async {
+        let (mut sink, mut stream) = socket.split();
+        let url = format!("{}://{host}", app.public_scheme);
+        if negotiate_sse {
+            let offer = Packet::Ready {
+                url: url.clone(),
+                negotiation: Some(protocol::Negotiation::sse("offer")),
+            };
+            ensure!(
+                send(
+                    &mut sink,
+                    Message::Text(serde_json::to_string(&offer)?.into())
+                )
+                .await,
+                "Offer write failed"
+            );
+            let confirm = tokio::time::timeout(Duration::from_secs(10), stream.next()).await?;
+            let Some(Ok(Message::Text(text))) = confirm else {
+                anyhow::bail!("Missing capability confirmation")
+            };
+            ensure!(text.len() <= 4096, "Oversized negotiation");
+            ensure!(
+                matches!(serde_json::from_str::<Packet>(&text)?, Packet::Ready { url: u, negotiation: Some(n) } if u == url && n.is_sse("confirm")),
+                "Invalid capability confirmation"
+            );
+        }
+        // Publish after authentication/confirmation, before notifying readiness.
+        // Requests can queue now, but the writer starts only after the final Ready.
+        let changes = app.domain_changes.lock().await;
+        ensure!(!cancel.is_cancelled(), "Tunnel revoked");
+        app.tunnels
+            .lock()
+            .unwrap()
+            .insert(host.clone(), tunnel.clone());
+        drop(changes);
+        let ready = Packet::Ready {
+            url,
+            negotiation: negotiate_sse.then(|| protocol::Negotiation::sse("active")),
+        };
+        ensure!(
+            send(
+                &mut sink,
+                Message::Text(serde_json::to_string(&ready)?.into())
+            )
+            .await,
+            "Ready write failed"
+        );
         app.auth
             .event(identity.as_ref(), "tunnel_connect", "success", &name)
             .await;
-        let (mut sink, mut stream) = socket.split();
-        let ready = serde_json::to_string(&Packet::Ready {
-            url: format!("{}://{host}", app.public_scheme),
-        })
-        .unwrap();
-        if sink.send(Message::Text(ready.into())).await.is_ok() {
-            let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
-            let mut last_seen = tokio::time::Instant::now();
-            loop {
-                tokio::select! {
-                    _=heartbeat.tick()=> {
-                        if last_seen.elapsed()>Duration::from_secs(60) {break;}
-                        if let Some(identity)=&identity && !app.auth.active(identity).await {break;}
-                        if !send(&mut sink,Message::Ping(Vec::new().into())).await {break;}
-                    }
-                    Some(packet)=rx.recv()=> {
-                        if !send(&mut sink,Message::Text(serde_json::to_string(&packet).unwrap().into())).await {break;}
-                    }
-                    message=stream.next()=>match message {
-                        Some(Ok(Message::Text(text)))=> {
-                            last_seen=tokio::time::Instant::now();
-                            match serde_json::from_str::<Packet>(&text) {
-                                Ok(packet @ (Packet::Response { .. }|Packet::WsOpened{..}))=> {
-                                    let id=match &packet {Packet::Response{id,..}|Packet::WsOpened{id,..}=>id,_=>unreachable!()};
-                                    let tx=pending.lock().unwrap().remove(id);
-                                    if let Some(tx)=tx {let _=tx.send(packet);}
-                                }
-                                Ok(Packet::WsFrame{id,frame})=>websocket::dispatch(&streams,&id,frame),
-                                Ok(Packet::WsClose{id})=> {
-                                    streams.lock().unwrap().remove(&id);
-                                    pending.lock().unwrap().remove(&id);
-                                }
-                                _=>break,
-                            }
+        let mut writer = tokio::task::JoinSet::new();
+        let pending = tunnel.pending.clone();
+        writer.spawn(async move {
+            while let Some(frame) = outgoing.next().await {
+                let message = match frame {
+                    wire::Out::Packet(packet) => {
+                        if let Packet::Request { id, .. } = &packet
+                            && !pending.lock().unwrap().contains_key(id)
+                        {
+                            continue;
                         }
-                        Some(Ok(Message::Pong(_)))=>last_seen=tokio::time::Instant::now(),
-                        Some(Ok(Message::Ping(p)))=> {if !send(&mut sink,Message::Pong(p)).await {break;}},
-                        _=>break,
+                        Message::Text(serde_json::to_string(&packet)?.into())
                     }
+                    wire::Out::Ping(data) => Message::Ping(data.into()),
+                    wire::Out::Pong(data) => Message::Pong(data.into()),
+                };
+                ensure!(send(&mut sink, message).await, "Tunnel write failed");
+            }
+            Ok::<(), anyhow::Error>(())
+        });
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
+        let mut last_seen = tokio::time::Instant::now();
+        loop {
+            tokio::select! {
+                _ = writer.join_next() => anyhow::bail!("Tunnel writer stopped"),
+                _ = heartbeat.tick() => {
+                    ensure!(last_seen.elapsed() < Duration::from_secs(60), "Tunnel heartbeat timed out");
+                    if let Some(identity) = &identity { ensure!(app.auth.active(identity).await, "Tunnel revoked"); }
+                    control.try_send(wire::Out::Ping(Vec::new())).map_err(|_| anyhow::anyhow!("Control queue full"))?;
+                }
+                message = stream.next() => match message {
+                    Some(Ok(Message::Text(text))) => {
+                        last_seen = tokio::time::Instant::now();
+                        let packet = serde_json::from_str::<Packet>(&text)?;
+                        ensure!(http_sse::valid_packet(&packet, text.len()), "Invalid SSE envelope");
+                        match packet {
+                            packet @ (Packet::Response { .. } | Packet::WsOpened { .. }) => {
+                                let id = match &packet { Packet::Response { id, .. } | Packet::WsOpened { id, .. } => id, _ => unreachable!() };
+                                ensure!(!tunnel.sse_heads.lock().unwrap().contains(id), "Response after SSE head");
+                                if let Some(tx) = tunnel.pending.lock().unwrap().remove(id) { let _ = tx.send(packet); }
+                            }
+                            Packet::WsFrame { id, frame } => websocket::dispatch(&tunnel.streams, &id, frame),
+                            Packet::WsClose { id } => { tunnel.streams.lock().unwrap().remove(&id); tunnel.pending.lock().unwrap().remove(&id); }
+                            packet @ Packet::SseHead { .. } if negotiate_sse => {
+                                ensure!(text.len() <= http_sse::HEAD_WIRE, "Oversized SSE head");
+                                let Packet::SseHead { ref id, .. } = packet else { unreachable!() };
+                                ensure!(!tunnel.sse_heads.lock().unwrap().contains(id), "Duplicate SSE head");
+                                if let Some(tx) = tunnel.pending.lock().unwrap().remove(id) {
+                                    tunnel.sse_heads.lock().unwrap().insert(id.clone());
+                                    let _ = tx.send(packet);
+                                } else { sse::control(&tunnel, Packet::SseCancel { id: id.clone() }); }
+                            }
+                            packet @ (Packet::SseData { .. } | Packet::SseEnd { .. }) if negotiate_sse => {
+                                ensure!(text.len() <= http_sse::DATA_WIRE, "Oversized SSE frame");
+                                sse::dispatch(&tunnel, packet)?;
+                            }
+                            _ => anyhow::bail!("Unexpected tunnel packet"),
+                        }
+                    }
+                    Some(Ok(Message::Pong(_))) => last_seen = tokio::time::Instant::now(),
+                    Some(Ok(Message::Ping(data))) => { control.try_send(wire::Out::Pong(data.to_vec())).map_err(|_| anyhow::anyhow!("Control queue full"))?; }
+                    _ => anyhow::bail!("Tunnel disconnected"),
                 }
             }
         }
@@ -494,7 +602,7 @@ async fn session(
     tokio::select! {
         biased;
         _ = cancel.cancelled() => {},
-        _ = run => {},
+        result = run => { let result: Result<()> = result; if result.is_err() { eprintln!("tunnel end=connection_or_protocol_error"); } },
     }
     let outcome = if cancel.is_cancelled() {
         "revoked"
@@ -503,12 +611,15 @@ async fn session(
     };
     cancel.cancel();
     app.tunnels.lock().unwrap().remove(&host);
-    pending.lock().unwrap().clear();
-    streams.lock().unwrap().clear();
+    tunnel.pending.lock().unwrap().clear();
+    tunnel.streams.lock().unwrap().clear();
+    tunnel.sse_streams.lock().unwrap().clear();
+    tunnel.sse_heads.lock().unwrap().clear();
     app.auth
         .event(identity.as_ref(), "tunnel_disconnect", outcome, &name)
         .await;
 }
+
 async fn send<S>(sink: &mut S, message: Message) -> bool
 where
     S: futures_util::Sink<Message> + Unpin,

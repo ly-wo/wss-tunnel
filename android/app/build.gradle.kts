@@ -135,6 +135,8 @@ tasks.register<Exec>("buildJni") {
     inputs.dir(repoRoot.resolve("client/jni/src"))
     inputs.dir(repoRoot.resolve("client/src"))
     inputs.file(repoRoot.resolve("protocol.rs"))
+    inputs.file(repoRoot.resolve("http_sse.rs"))
+    inputs.file(repoRoot.resolve("wire.rs"))
     inputs.file(repoRoot.resolve("Cargo.toml"))
     inputs.file(repoRoot.resolve("Cargo.lock"))
     inputs.file(repoRoot.resolve("client/Cargo.toml"))

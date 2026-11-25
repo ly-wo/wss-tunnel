@@ -108,3 +108,17 @@ test('health path and application argv remain local and explicit', t => {
     assert.throws(() => tunnelPlan(root, { TUNNEL_APP_COMMAND_JSON: value }));
   }
 });
+
+
+test('SSE settings use validated argv and are not leaked through child env', t => {
+  const root = fixture(t);
+  const settings = { TUNNEL_HTTP_SSE: 'off', TUNNEL_SSE_MAX_STREAMS: '3', TUNNEL_SSE_IDLE_TIMEOUT: '45', TUNNEL_SSE_BACKPRESSURE_TIMEOUT: '60' };
+  const plan = tunnelPlan(root, settings);
+  assert.deepEqual(plan.args.slice(-8), ['--http-sse', 'off', '--sse-max-streams', '3', '--sse-idle-timeout', '45', '--sse-backpressure-timeout', '60']);
+  assert(!Object.keys(plan.env).some(k => k.startsWith('TUNNEL_')));
+  for (const overrides of [{TUNNEL_HTTP_SSE:'on'}, {TUNNEL_SSE_MAX_STREAMS:'9'}, {TUNNEL_SSE_IDLE_TIMEOUT:'0'}, {TUNNEL_SSE_BACKPRESSURE_TIMEOUT:'NaN'}]) assert.throws(() => tunnelPlan(root, overrides));
+  const bin = path.join(root, 'pre-sse-client');
+  fs.writeFileSync(bin, '#!/bin/sh\nprintf "%s" "--access-basic-username --access-basic-password-file --access-bearer-token-file"\n', { mode: 0o700 });
+  verifyClient({ ...tunnelPlan(root, {}), bin });
+  assert.throws(() => verifyClient({ ...plan, bin }), /--http-sse/);
+});
